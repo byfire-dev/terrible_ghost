@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Debug Intro</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { margin: 0; background: #000; height: 100vh; display: flex; }
+    .shell { width: 960px; height: 600px; margin: auto; position: relative; background: #0a0e0c; }
+    .debug-info { position: fixed; top: 10px; left: 10px; color: #0f0; font-family: monospace; z-index: 100; background: rgba(0,0,0,0.8); padding: 10px; }
+  </style>
+</head>
+<body>
+  <div class="debug-info" id="debug">Click button to test intro</div>
+  <div class="shell">
+    <div id="banner" class="banner">
+      <h1>迷雾森林逃生</h1>
+      <p>黑暗森林已经苏醒，带上武器，找到逃生车。</p>
+      <button id="startBtn" type="button">开始游戏</button>
+    </div>
+  </div>
+
+  <script>
+    const banner = document.getElementById('banner');
+    const debug = document.getElementById('debug');
+    
+    document.getElementById('startBtn').addEventListener('click', () => {
+      debug.textContent = 'showIntro() called';
+      
+      banner.innerHTML = `
+        <div class="intro-scene" aria-label="开场剧情">
+          <div class="intro-fog-layer"></div>
+          <div class="intro-rain"></div>
+          <div class="intro-vignette"></div>
+          <div class="intro-road">
+            <div class="intro-lane"></div>
+            <div class="intro-car">
+              <span class="intro-car-top"></span>
+              <span class="intro-wheel intro-wheel-a"></span>
+              <span class="intro-wheel intro-wheel-b"></span>
+            </div>
+          </div>
+          <div class="intro-story">
+            <p class="intro-line-1">老板跟我说，来这片森林打猎，四天后派车来接我。</p>
+            <p class="intro-line-2">第四天，车没有来。第五天，也没有。</p>
+            <p class="intro-line-3">食物吃光了。夜里，窗外有东西在走动。</p>
+            <p class="intro-line-4">我不知道那是什么。但我知道，我必须离开这里。</p>
+          </div>
+          <button id="introStartBtn" class="intro-start" type="button">开始逃亡</button>
+        </div>
+      `;
+      
+      banner.classList.remove('hidden');
+      
+      debug.textContent = 'Banner innerHTML set, hidden removed. Banner classes: ' + banner.className;
+      
+      // Check if intro-scene exists
+      const introScene = banner.querySelector('.intro-scene');
+      if (introScene) {
+        const rect = introScene.getBoundingClientRect();
+        debug.textContent += ` | intro-scene: ${rect.width}x${rect.height} at (${rect.left},${rect.top})`;
+      } else {
+        debug.textContent += ' | intro-scene NOT FOUND!';
+      }
+    });
+  </script>
+</body>
+</html>

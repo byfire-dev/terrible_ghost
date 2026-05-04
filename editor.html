@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>迷雾森林逃生 - 关卡编辑器</title>
+  <style>
+    body { margin: 0; background: #0b1110; color: #eef6ee; font-family: system-ui, sans-serif; }
+    .bar { display: flex; gap: 10px; align-items: center; padding: 12px; background: #111a18; border-bottom: 1px solid rgba(255,255,255,.12); }
+    button, select, input { min-height: 34px; border-radius: 8px; border: 1px solid rgba(255,255,255,.16); background: #172421; color: #eef6ee; padding: 0 10px; }
+    button { cursor: pointer; font-weight: 800; }
+    canvas { display: block; width: 100vw; height: calc(100vh - 59px); background: #102018; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <strong>关卡编辑器</strong>
+    <select id="tool">
+      <option value="wall">墙</option>
+      <option value="monster">怪物</option>
+      <option value="chest">宝箱</option>
+      <option value="ammo">子弹</option>
+      <option value="medkit">医疗包</option>
+      <option value="car">逃生车</option>
+      <option value="parking">停车场</option>
+    </select>
+    <input id="levelName" value="自定义关卡" aria-label="关卡名称">
+    <button id="exportBtn" type="button">导出 JSON</button>
+    <button id="clearBtn" type="button">清空</button>
+    <a href="index.html" style="color:#f0c453">返回游戏</a>
+  </div>
+  <canvas id="editor" width="1280" height="720"></canvas>
+  <script type="module" src="./src/editor.js"></script>
+</body>
+</html>
