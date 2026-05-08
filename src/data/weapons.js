@@ -34,6 +34,6 @@ for (let level = 10; level <= 24; level += 1) {
 
 weapons.forEach((weapon) => {
   if (weapon.price > 0) {
-    weapon.price = Math.round(weapon.price * 1.85 + weapon.level * 28);
+    weapon.price = Math.round(weapon.price * 1.35 + weapon.level * 18);
   }
 });

@@ -7,6 +7,7 @@
     "start": "python3 -m http.server 8000",
     "check": "node --check game.js && find src -name '*.js' -print0 | xargs -0 -n1 node --check",
     "typecheck": "tsc -p tsconfig.json",
+    "release:check": "npm run check && npm run typecheck && node scripts/release-check.mjs",
     "electron": "electron electron/main.js"
   },
   "devDependencies": {

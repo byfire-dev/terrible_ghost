@@ -36,8 +36,8 @@ import { updateAmmoHud as renderAmmoHud, updateHud as renderHud } from "./ui/hud
 import { renderQuickbar as renderQuickbarView, renderShop as renderShopView } from "./ui/shop.js";
 import { clamp, dist, rand } from "./utils/math.js";
 
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
+const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById("game"));
+const ctx = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
 
 const ui = getUi();
 
@@ -65,6 +65,140 @@ let running = false;
 let shootHeld = false;
 
 const game = createInitialGameState();
+
+function loadVisualAsset(src) {
+  const image = new Image();
+  image.decoding = "async";
+  image.dataset.src = src;
+  return image;
+}
+
+const visualAssets = {
+  forestGround: loadVisualAsset("assets/images/forest-ground-horror-texture.webp"),
+  mazeStone: loadVisualAsset("assets/images/maze-stone-horror-texture.webp"),
+  worldProps: loadVisualAsset("assets/images/world-props-atlas.webp"),
+  objectiveIcons: loadVisualAsset("assets/images/objective-icons-atlas.webp"),
+};
+
+const WORLD_PROP = {
+  deadTree: [0, 0],
+  bush: [1, 0],
+  rock: [2, 0],
+  rubble: [3, 0],
+  tent: [0, 1],
+  collapsedTent: [1, 1],
+  log: [2, 1],
+  sign: [3, 1],
+  crate: [0, 2],
+  chest: [1, 2],
+  medkit: [2, 2],
+  bones: [3, 2],
+  entrance: [0, 3],
+  door: [1, 3],
+  car: [2, 3],
+  wreckCar: [3, 3],
+};
+
+const OBJECTIVE_ICON = {
+  key: [0, 0],
+  watchtower: [1, 0],
+  parking: [2, 0],
+  lockedDoor: [0, 1],
+  unlockedDoor: [1, 1],
+  portal: [2, 1],
+  radio: [0, 2],
+  shopCrate: [1, 2],
+  bossSigil: [2, 2],
+};
+
+const STORY_TENT_KEY = "story-tent";
+const STORY_WATCHTOWER_KEY = "story-watchtower";
+
+function imageReady(image) {
+  return image.complete && image.naturalWidth > 0;
+}
+
+function ensureVisualAsset(image) {
+  if (!image.src && image.dataset.src) image.src = image.dataset.src;
+  return image;
+}
+
+function ensureVisualAssetsLoaded() {
+  Object.values(visualAssets).forEach(ensureVisualAsset);
+}
+
+/**
+ * @param {GlobalCompositeOperation} [blend]
+ */
+function drawTiledVisual(image, left, top, width, height, tileSize, alpha, blend = "source-over") {
+  if (!imageReady(image)) return false;
+  const startX = Math.floor(left / tileSize) * tileSize;
+  const startY = Math.floor(top / tileSize) * tileSize;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.globalCompositeOperation = blend;
+  for (let x = startX; x < left + width + tileSize; x += tileSize) {
+    for (let y = startY; y < top + height + tileSize; y += tileSize) {
+      ctx.drawImage(image, x, y, tileSize, tileSize);
+    }
+  }
+  ctx.restore();
+  return true;
+}
+
+function drawAtlasSprite(image, columns, rows, cell, x, y, width, height, rotation = 0, alpha = 1) {
+  if (!imageReady(image)) return false;
+  const [col, row] = cell;
+  const cellW = image.naturalWidth / columns;
+  const cellH = image.naturalHeight / rows;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.globalAlpha *= alpha;
+  ctx.drawImage(image, col * cellW, row * cellH, cellW, cellH, -width / 2, -height / 2, width, height);
+  ctx.restore();
+  return true;
+}
+
+function drawWorldPulse(x, y, radius, tone = "#f0c453", strength = 1) {
+  if (game.mode !== MODE.PLAYING) return;
+  const time = performance.now();
+  const pulse = 0.5 + Math.sin(time / 220 + x * 0.008 + y * 0.006) * 0.5;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowBlur = 22 * strength;
+  ctx.shadowColor = tone;
+  ctx.strokeStyle = tone;
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = (0.28 + pulse * 0.26) * strength;
+  ctx.beginPath();
+  ctx.arc(x, y, radius + pulse * 9, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = (0.08 + pulse * 0.12) * strength;
+  ctx.fillStyle = tone;
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 0.72 + pulse * 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.setLineDash([8, 10]);
+  ctx.globalAlpha = (0.24 + pulse * 0.2) * strength;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 1.22 + pulse * 6, -time / 900, Math.PI * 1.45 - time / 900);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function rectCenter(rect) {
+  return {
+    x: rect.x + rect.w / 2,
+    y: rect.y + rect.h / 2,
+  };
+}
+
+function distanceToRectCenter(rect) {
+  const center = rectCenter(rect);
+  return Math.hypot(center.x - game.player.x, center.y - game.player.y);
+}
 
 function currentWeapon() {
   return getCurrentWeapon(game);
@@ -102,6 +236,136 @@ function addAmmo(level, amount) {
 
 function updateAmmoHud() {
   renderAmmoHud(ui, currentAmmo(), MAX_AMMO);
+}
+
+function plannedStoryEntrance(day = game.day) {
+  return {
+    x: 820 + day * 70,
+    y: -420 - day * 35,
+    w: 106,
+    h: 82,
+  };
+}
+
+function setupForestQuest(day = game.day) {
+  game.questStage = 0;
+  game.storyTent = {
+    type: "tent",
+    x: 360 + day * 18,
+    y: -160 - day * 10,
+    r: 34,
+    seed: 0.36,
+    key: STORY_TENT_KEY,
+  };
+  game.storyWatchtower = {
+    type: "watchtower",
+    x: 760 + day * 36,
+    y: -420 - day * 22,
+    r: 34,
+    seed: 0.68,
+    key: STORY_WATCHTOWER_KEY,
+  };
+  game.storyEntrance = plannedStoryEntrance(day);
+  game.nightmareEntrance = null;
+}
+
+function isOpeningForestQuestActive() {
+  return game.phase === "forest" && !game.forestReturn && !game.car && !game.driving && !game.escapeOnFoot;
+}
+
+function revealNightmareEntrance() {
+  if (!isOpeningForestQuestActive()) return;
+  game.questStage = Math.max(game.questStage || 0, 2);
+  game.nightmareEntrance = game.storyEntrance || plannedStoryEntrance();
+  burst(game.nightmareEntrance.x + game.nightmareEntrance.w / 2, game.nightmareEntrance.y + game.nightmareEntrance.h / 2, "#a048ff", 36);
+  burst(game.nightmareEntrance.x + game.nightmareEntrance.w / 2, game.nightmareEntrance.y + game.nightmareEntrance.h / 2, "#f0c453", 18);
+  playSound("open");
+  setTask(2);
+}
+
+function currentObjectiveTarget() {
+  if (game.phase === "maze") {
+    if (game.foundKeys >= 2 && game.door) {
+      return {
+        x: game.door.x + game.door.w / 2,
+        y: game.door.y + game.door.h / 2,
+        label: "大门",
+      };
+    }
+    const keys = game.pickups.filter((item) => item.type === "key");
+    if (keys.length > 0) {
+      return keys.reduce((nearest, item) => (dist(game.player, item) < dist(game.player, nearest) ? item : nearest), keys[0]);
+    }
+    return null;
+  }
+  if (game.phase !== "forest") return null;
+  if ((game.driving || game.escapeOnFoot) && game.parkingLot) {
+    return {
+      x: game.parkingLot.x + game.parkingLot.w / 2,
+      y: game.parkingLot.y + game.parkingLot.h / 2,
+      label: "停车场",
+    };
+  }
+  if (game.car) {
+    return {
+      x: game.car.x + game.car.w / 2,
+      y: game.car.y + game.car.h / 2,
+      label: "逃生车",
+    };
+  }
+  if (isOpeningForestQuestActive() && (game.questStage || 0) <= 0 && game.storyTent) {
+    return {
+      x: game.storyTent.x,
+      y: game.storyTent.y,
+      label: "线索帐篷",
+    };
+  }
+  if (isOpeningForestQuestActive() && game.questStage === 1 && game.storyWatchtower) {
+    return {
+      x: game.storyWatchtower.x,
+      y: game.storyWatchtower.y,
+      label: "瞭望塔",
+    };
+  }
+  if (game.nightmareEntrance) {
+    return {
+      x: game.nightmareEntrance.x + game.nightmareEntrance.w / 2,
+      y: game.nightmareEntrance.y + game.nightmareEntrance.h / 2,
+      label: "地下入口",
+    };
+  }
+  return null;
+}
+
+function currentObjectiveCopy() {
+  if (game.phase === "maze") {
+    if (game.foundKeys >= 2) return ["打开大门", "穿过迷宫出口，回到森林继续逃亡。"];
+    return ["收集钥匙", `还需要 ${Math.max(0, 2 - game.foundKeys)} 把钥匙，优先绕开怪物。`];
+  }
+  if (game.driving) return ["冲向停车场", "车辆无法射击，利用走位甩开追击。"];
+  if (game.escapeOnFoot) return ["徒步抵达停车场", "车已损坏，保持距离，别被围住。"];
+  if (game.car) return ["找到逃生车", "跟随信标靠近车辆，准备进入最终逃亡。"];
+  if (isOpeningForestQuestActive() && (game.questStage || 0) <= 0) return ["搜寻帐篷", "找到入口线索，再去瞭望塔确认方向。"];
+  if (isOpeningForestQuestActive() && game.questStage === 1) return ["登上瞭望塔", "在高处定位地下入口，入口才会显现。"];
+  if (game.nightmareEntrance) return ["寻找地下入口", "进入噩梦迷宫，拿到逃生所需钥匙。"];
+  return ["活下去", "击败怪物、搜刮补给，等待新的逃生线索。"];
+}
+
+function updateObjectiveHud() {
+  if (!(ui.objectiveToast instanceof HTMLElement) || !(ui.threatMeter instanceof HTMLElement)) return;
+  const visible = game.mode === MODE.PLAYING;
+  ui.objectiveToast.classList.toggle("hidden", !visible);
+  ui.threatMeter.classList.toggle("hidden", !visible);
+  if (!visible) return;
+
+  const [title, detail] = currentObjectiveCopy();
+  ui.objectiveTitle.textContent = title;
+  ui.objectiveDetail.textContent = detail;
+
+  const threat = monsterThreatAlpha();
+  const level = threat > 0.42 ? "high" : threat > 0.18 ? "medium" : "low";
+  ui.threatMeter.dataset.level = level;
+  ui.threatLevel.textContent = level === "high" ? "高" : level === "medium" ? "中" : "低";
 }
 
 function seededNoise(x, y) {
@@ -174,7 +438,7 @@ function forestDecorForCell(gx, gy) {
   const x = gx * 320 + 60 + seededNoise(gx + 103, gy) * 200;
   const y = gy * 320 + 60 + seededNoise(gx, gy + 107) * 200;
   if (Math.hypot(x, y) < 260) return null;
-  const variants = ["tent", "log", "bones", "crate", "sign", "campfire"];
+  const variants = ["tent", "log", "bones", "crate", "sign", "campfire", "watchtower", "watchtower"];
   return {
     type: variants[Math.floor(seededNoise(gx - 43, gy + 61) * variants.length) % variants.length],
     x,
@@ -252,18 +516,34 @@ function updateTentSearching(dt) {
     return;
   }
   game.tentSearchCooldown = Math.max(0, game.tentSearchCooldown - dt);
-  // 找到最近的未搜刮帐篷
+  // 找到最近的帐篷（包括已搜刮的，用于显示提示）
   let nearest = null;
   let nearestDist = Infinity;
-  for (const item of game.forestDecor) {
-    if (item.type !== "tent") continue;
-    if (game.searchedTents?.has(item.key)) continue;
-    const dx = game.player.x - item.x;
-    const dy = game.player.y - item.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < nearestDist) {
-      nearestDist = dist;
-      nearest = item;
+  const px = game.player.x;
+  const py = game.player.y;
+  if (isOpeningForestQuestActive() && game.storyTent) {
+    const d = Math.hypot(px - game.storyTent.x, py - game.storyTent.y);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = game.storyTent;
+    }
+  }
+  const searchRadius = 200; // 搜索范围
+  const startX = Math.floor((px - searchRadius) / 320) - 1;
+  const endX = Math.ceil((px + searchRadius) / 320) + 1;
+  const startY = Math.floor((py - searchRadius) / 320) - 1;
+  const endY = Math.ceil((py + searchRadius) / 320) + 1;
+  for (let gx = startX; gx <= endX; gx += 1) {
+    for (let gy = startY; gy <= endY; gy += 1) {
+      const decor = forestDecorForCell(gx, gy);
+      if (!decor || decor.type !== "tent") continue;
+      const dx = px - decor.x;
+      const dy = py - decor.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearest = decor;
+      }
     }
   }
   // 距离小于80像素时显示提示
@@ -276,8 +556,16 @@ function updateTentSearching(dt) {
 
 function searchTent(tent) {
   if (game.tentSearchCooldown > 0) return;
+  if (game.searchedTents.has(tent.key)) return;
   game.tentSearchCooldown = 0.5;
   game.searchedTents.add(tent.key);
+  if (isOpeningForestQuestActive() && (game.questStage || 0) <= 0) {
+    game.questStage = 1;
+    setTask(1);
+    burst(tent.x, tent.y - 36, "#f0c453", 22);
+    playSound("pickup");
+    if (game.storyWatchtower?.key && game.searchedWatchtowers.has(game.storyWatchtower.key)) revealNightmareEntrance();
+  }
   // 奖励：50% 医疗包，50% 积分
   if (Math.random() < 0.5) {
     const level = Math.floor(Math.random() * 3) + 1;
@@ -292,18 +580,159 @@ function searchTent(tent) {
     burst(tent.x, tent.y - 20, "#ff4444", 8);
   } else {
     const points = Math.floor(Math.random() * 100) + 50;
-    game.score += points;
+    game.points += points;
     burst(tent.x, tent.y - 20, "#ffd700", 8);
   }
   // 视觉效果
   burst(tent.x, tent.y, "#4b392f", 20);
   burst(tent.x, tent.y, "#8b7355", 10);
+  writeSave(game);
 }
 
 function isOnRockDebris(circle) {
   if (game.phase !== "forest") return false;
   return forestFeaturesNear(circle.x, circle.y, circle.r + 90)
     .some((feature) => feature.type === "rock" && game.brokenRocks.has(feature.key) && Math.hypot(circle.x - feature.x, circle.y - feature.y) < feature.r * 0.86);
+}
+
+// ========== 瞭望塔系统 ==========
+
+function watchtowerContaining(circle) {
+  if (game.phase !== "forest") return null;
+  const px = circle.x;
+  const py = circle.y;
+  if (isOpeningForestQuestActive() && game.storyWatchtower) {
+    const d = Math.hypot(px - game.storyWatchtower.x, py - game.storyWatchtower.y);
+    if (d < 55) return game.storyWatchtower;
+  }
+  const searchRadius = 200;
+  const startX = Math.floor((px - searchRadius) / 320) - 1;
+  const endX = Math.ceil((px + searchRadius) / 320) + 1;
+  const startY = Math.floor((py - searchRadius) / 320) - 1;
+  const endY = Math.ceil((py + searchRadius) / 320) + 1;
+  for (let gx = startX; gx <= endX; gx += 1) {
+    for (let gy = startY; gy <= endY; gy += 1) {
+      const decor = forestDecorForCell(gx, gy);
+      if (!decor || decor.type !== "watchtower") continue;
+      const d = Math.hypot(px - decor.x, py - decor.y);
+      if (d < 55) return decor;
+    }
+  }
+  return null;
+}
+
+function updateWatchtowerHiding(dt) {
+  if (game.phase !== "forest" || game.driving) {
+    game.inWatchtower = false;
+    game.nearWatchtower = null;
+    game.watchtowerSearchCooldown = Math.max(0, game.watchtowerSearchCooldown - dt);
+    return;
+  }
+  game.watchtowerSearchCooldown = Math.max(0, game.watchtowerSearchCooldown - dt);
+  const tower = watchtowerContaining(game.player);
+  game.inWatchtower = Boolean(tower);
+  if (tower) {
+    game.nearWatchtower = tower;
+  } else {
+    // 检查附近是否有未搜刮的瞭望塔（显示提示）
+    let nearest = null;
+    let nearestDist = Infinity;
+    const px = game.player.x;
+    const py = game.player.y;
+    if (isOpeningForestQuestActive() && game.storyWatchtower) {
+      const d = Math.hypot(px - game.storyWatchtower.x, py - game.storyWatchtower.y);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearest = game.storyWatchtower;
+      }
+    }
+    const startX = Math.floor((px - 200) / 320) - 1;
+    const endX = Math.ceil((px + 200) / 320) + 1;
+    const startY = Math.floor((py - 200) / 320) - 1;
+    const endY = Math.ceil((py + 200) / 320) + 1;
+    for (let gx = startX; gx <= endX; gx += 1) {
+      for (let gy = startY; gy <= endY; gy += 1) {
+        const decor = forestDecorForCell(gx, gy);
+        if (!decor || decor.type !== "watchtower") continue;
+        const d = Math.hypot(px - decor.x, py - decor.y);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearest = decor;
+        }
+      }
+    }
+    if (nearest && nearestDist < 90) {
+      game.nearWatchtower = nearest;
+    } else {
+      game.nearWatchtower = null;
+    }
+  }
+}
+
+function searchWatchtower(tower) {
+  if (game.watchtowerSearchCooldown > 0) return;
+  if (game.searchedWatchtowers.has(tower.key)) return;
+  game.watchtowerSearchCooldown = 0.5;
+  game.searchedWatchtowers.add(tower.key);
+  const shouldRevealEntrance = isOpeningForestQuestActive() && game.questStage === 1;
+  // 奖励池：武器、子弹、医疗包、积分
+  const roll = Math.random();
+  if (roll < 0.25) {
+    // 25% 概率：随机武器（玩家尚未拥有的低等级武器，或当前武器等级的子弹）
+    const availableWeapons = weapons.filter((w) => !game.ownedWeapons.includes(w.id) && w.level <= Math.min(24, game.day * 3 + 2));
+    if (availableWeapons.length > 0) {
+      const weapon = availableWeapons[Math.floor(Math.random() * availableWeapons.length)];
+      game.ownedWeapons.push(weapon.id);
+      game.weaponId = weapon.id;
+      addAmmoToGame(game, weapon.level, ammoPackSize(weapon.level) * 2);
+      game.weaponSwitchTimer = 0.48;
+      burst(tower.x, tower.y - 30, weapon.color || "#ffd700", 12);
+      playSound("buy");
+    } else {
+      // 如果已有所有武器，给子弹
+      const weapon = getCurrentWeapon(game);
+      const ammoLevel = weapon.level;
+      const amount = ammoPackSize(ammoLevel) * 2;
+      addAmmoToGame(game, ammoLevel, amount);
+      burst(tower.x, tower.y - 30, "#9fe6ff", 10);
+      playSound("pickup");
+    }
+  } else if (roll < 0.5) {
+    // 25% 概率：子弹包
+    const weapon = getCurrentWeapon(game);
+    const ammoLevel = weapon.level;
+    const amount = ammoPackSize(ammoLevel) * 3;
+    addAmmoToGame(game, ammoLevel, amount);
+    burst(tower.x, tower.y - 30, "#9fe6ff", 10);
+    playSound("pickup");
+  } else if (roll < 0.75) {
+    // 25% 概率：医疗包
+    const level = Math.floor(Math.random() * 3) + 1;
+    game.pickups.push({
+      x: tower.x,
+      y: tower.y,
+      type: "medkit",
+      level: level,
+      r: 12,
+      life: 9999,
+    });
+    burst(tower.x, tower.y - 30, "#ff4444", 8);
+    playSound("pickup");
+  } else {
+    // 25% 概率：积分
+    const points = Math.floor(Math.random() * 150) + 100;
+    game.points += points;
+    burst(tower.x, tower.y - 30, "#ffd700", 10);
+    playSound("pickup");
+  }
+  // 视觉效果
+  burst(tower.x, tower.y, "#5a4a3a", 20);
+  burst(tower.x, tower.y, "#8b7355", 10);
+  writeSave(game);
+  renderQuickbar();
+  updateAmmoHud();
+  if (game.shopOpen) renderShop();
+  if (shouldRevealEntrance) revealNightmareEntrance();
 }
 
 function hitRockWithBullet(bullet) {
@@ -402,6 +831,8 @@ function resetGame(options = {}) {
     ownedWeapons: failureRestart ? game.ownedWeapons.filter((id) => fallbackWeapons.includes(id)) : loadedSave?.ownedWeapons ?? [...game.ownedWeapons],
     ammo: failureRestart ? lowLevelAmmo(game.ammo) : loadedSave?.ammo ?? { ...game.ammo },
   };
+  if (!Array.isArray(saved.ownedWeapons) || saved.ownedWeapons.length === 0) saved.ownedWeapons = ["pistol"];
+  if (!saved.ownedWeapons.includes(saved.weaponId)) saved.weaponId = saved.ownedWeapons[0] || "pistol";
   if (failureRestart && saved.ownedWeapons.length === 0) saved.ownedWeapons = ["pistol"];
   game.phase = "forest";
   game.player = { x: 0, y: 0, r: 15, hp: 100, speed: 205, angle: 0, damageCooldown: 0 };
@@ -413,6 +844,7 @@ function resetGame(options = {}) {
   game.walls = [];
   game.door = null;
   game.car = null;
+  game.nightmareEntrance = null;
   game.wreckCar = null;
   game.parkingLot = null;
   game.camera = { x: -W / 2, y: -H / 2 };
@@ -423,10 +855,11 @@ function resetGame(options = {}) {
   game.removedBushes = new Set();
   game.bushHideKey = null;
   game.bushHideTime = 0;
-  game.points = preserveProgress ? saved.points : 0;
-  game.weaponId = preserveProgress ? saved.weaponId : "pistol";
-  game.ownedWeapons = preserveProgress ? saved.ownedWeapons : ["pistol"];
-  game.ammo = preserveProgress ? saved.ammo : { 1: CONFIG.ammo.initial };
+  const restoreProgress = preserveProgress || Boolean(loadedSave);
+  game.points = restoreProgress ? saved.points : 0;
+  game.weaponId = restoreProgress ? saved.weaponId : "pistol";
+  game.ownedWeapons = restoreProgress ? saved.ownedWeapons : ["pistol"];
+  game.ammo = restoreProgress ? saved.ammo : { 1: CONFIG.ammo.initial };
   game.ammoSpawnTimer = rand(6, 12);
   game.medkitSpawnTimer = rand(8, 16);
   game.chestSpawnTimer = rand(10, 18);
@@ -445,33 +878,34 @@ function resetGame(options = {}) {
   game.driving = false;
   game.escapeOnFoot = false;
   game.danger = Math.max(1, 1 + (game.day - 1) * 0.55);
-  game.spawnTimer = 0;
+  game.spawnTimer = 6.2;
   game.shootCooldown = 0;
   game.forestReturn = false;
   game.won = false;
   game.searchedTents = new Set();
   game.tentSearchCooldown = 0;
+  game.searchedWatchtowers = new Set();
+  game.inWatchtower = false;
+  game.nearWatchtower = null;
+  game.watchtowerSearchCooldown = 0;
+  setupForestQuest(game.day);
   updateMouseWorld();
   renderShop();
   renderQuickbar();
   updateAmmoHud();
   setTask(0);
-  spawnForestMonsters(4 + (game.day - 1) * 2);
+  spawnForestMonsters(2 + game.day);
 }
 
 function start() {
-  console.log("start() called");
   stopIntroAtmosphere();
-  console.log("resetGame with loadSave");
+  ensureVisualAssetsLoaded();
   resetGame({ loadSave: true });
-  console.log("resetGame done, running =", running, "mode =", game.mode);
   running = true;
   game.mode = MODE.PLAYING;
-  console.log("Set running=true, mode=PLAYING, hiding banner");
   ui.banner.classList.add("hidden");
   playSound("open");
   lastTime = performance.now();
-  console.log("Starting game loop");
   requestAnimationFrame(loop);
 }
 
@@ -487,25 +921,24 @@ function showIntro() {
   game.mode = MODE.MENU;
   shootHeld = false;
   startIntroAtmosphere();
+  ensureVisualAssetsLoaded();
+  ui.banner.classList.remove("result-screen", "result-success", "result-failure");
+  ui.banner.classList.remove("home-menu");
   ui.banner.innerHTML = `
-    <div class="intro-scene" aria-label="开场剧情">
-      <div class="intro-bg-noise"></div>
-      <div class="intro-fog-layer"></div>
-      <div class="intro-fog-layer intro-fog-layer-2"></div>
-      <div class="intro-rain"></div>
-      <div class="intro-vignette"></div>
-      <div class="intro-blood-glow"></div>
+    <div class="intro-scene intro-premium" aria-label="开场剧情">
+      <div class="intro-cinema-bg"></div>
+      <div class="intro-grain"></div>
+      <div class="intro-scanline"></div>
+      <div class="intro-glass-rain"></div>
+      <div class="intro-danger-pulse"></div>
 
-      <div class="intro-road">
-        <div class="intro-lane"></div>
-        <div class="intro-car">
-          <span class="intro-car-top"></span>
-          <span class="intro-wheel intro-wheel-a"></span>
-          <span class="intro-wheel intro-wheel-b"></span>
-        </div>
+      <div class="intro-chapter">
+        <span class="intro-chapter-label">CASE FILE 07</span>
+        <strong>失联后的第七夜</strong>
       </div>
 
-      <div class="intro-story">
+      <div class="intro-story intro-dossier">
+        <span class="intro-dossier-kicker">最后一段车载记录</span>
         <p class="intro-line intro-line-1">老板跟我说，来这片森林打猎，四天后派车来接我。</p>
         <p class="intro-line intro-line-2">第四天，车没有来。第五天，也没有。</p>
         <p class="intro-line intro-line-3">食物吃光了。夜里，窗外有东西在走动。</p>
@@ -514,7 +947,7 @@ function showIntro() {
       </div>
 
       <div class="intro-bottom">
-        <div class="intro-day-counter">第 <span class="intro-day-num">7</span> 天</div>
+        <div class="intro-day-counter">目标：搜寻线索，定位地下入口</div>
         <button id="introStartBtn" class="intro-start" type="button">开始逃亡</button>
       </div>
     </div>
@@ -697,6 +1130,233 @@ function showIntro() {
         color: rgba(230,190,170,1);
         box-shadow: 0 0 18px rgba(160,40,30,0.4);
       }
+      .intro-scene.intro-premium {
+        justify-content: flex-start;
+        align-items: stretch;
+        background:
+          linear-gradient(90deg, rgba(2, 5, 7, 0.9) 0%, rgba(3, 7, 9, 0.68) 36%, rgba(5, 7, 8, 0.24) 66%, rgba(0, 0, 0, 0.74) 100%),
+          linear-gradient(180deg, rgba(0,0,0,0.2), rgba(0,0,0,0.74)),
+          url("assets/images/intro-story-cockpit.webp") center / cover no-repeat;
+      }
+      .intro-cinema-bg {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(circle at 68% 44%, rgba(239, 199, 116, 0.12), transparent 18%),
+          radial-gradient(circle at 28% 82%, rgba(148, 19, 20, 0.28), transparent 24%),
+          linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.76));
+        pointer-events: none;
+      }
+      .intro-grain,
+      .intro-scanline,
+      .intro-glass-rain,
+      .intro-danger-pulse {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .intro-grain {
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.16'/%3E%3C/svg%3E");
+        opacity: 0.25;
+        mix-blend-mode: overlay;
+      }
+      .intro-scanline {
+        background: repeating-linear-gradient(180deg, rgba(255,255,255,0.04) 0 1px, transparent 1px 8px);
+        opacity: 0.22;
+      }
+      .intro-glass-rain {
+        background:
+          repeating-linear-gradient(102deg, transparent 0 11px, rgba(165, 195, 200, 0.07) 11px 12px),
+          radial-gradient(ellipse at 52% 22%, rgba(205, 232, 235, 0.12), transparent 26%);
+        animation: introRainFall 0.32s linear infinite;
+        opacity: 0.56;
+      }
+      .intro-danger-pulse {
+        background: radial-gradient(ellipse at 23% 88%, rgba(175, 20, 22, 0.28), transparent 30%);
+        animation: introBloodPulse 2.8s ease-in-out infinite alternate;
+      }
+      .intro-chapter {
+        position: absolute;
+        top: clamp(28px, 5vw, 72px);
+        right: clamp(24px, 5vw, 76px);
+        z-index: 10;
+        width: min(250px, 42vw);
+        padding: 14px 16px;
+        border: 1px solid rgba(240, 196, 83, 0.22);
+        border-radius: 8px;
+        background: rgba(2, 7, 8, 0.56);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 18px 58px rgba(0, 0, 0, 0.45);
+      }
+      .intro-chapter-label,
+      .intro-chapter strong {
+        display: block;
+      }
+      .intro-chapter-label {
+        color: rgba(240, 196, 83, 0.68);
+        font-size: 11px;
+        letter-spacing: 0.18em;
+      }
+      .intro-chapter strong {
+        margin-top: 5px;
+        color: rgba(246, 237, 219, 0.9);
+        font-size: 18px;
+      }
+      .intro-story.intro-dossier {
+        position: absolute;
+        left: clamp(28px, 7vw, 92px);
+        top: 50%;
+        z-index: 10;
+        width: min(620px, 86vw);
+        max-width: none;
+        padding: 0;
+        margin: 0;
+        transform: translateY(-48%);
+        text-align: left;
+      }
+      .intro-dossier-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 20px;
+        color: rgba(238, 246, 238, 0.58);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.18em;
+      }
+      .intro-dossier-kicker::before {
+        content: "";
+        width: 26px;
+        height: 1px;
+        background: rgba(228, 91, 79, 0.78);
+        box-shadow: 0 0 14px rgba(228, 91, 79, 0.48);
+      }
+      .intro-premium .intro-line {
+        margin: 0 0 10px;
+        color: rgba(229, 219, 198, 0.82);
+        font-size: clamp(17px, 2vw, 27px);
+        line-height: 1.65;
+        letter-spacing: 0.02em;
+        opacity: 0;
+        transform: translateY(10px);
+        animation: introPremiumLineFade 0.78s ease forwards;
+        text-shadow: 0 4px 30px rgba(0, 0, 0, 0.84);
+      }
+      .intro-premium .intro-line em {
+        color: #ff6b67;
+        text-shadow: 0 0 24px rgba(228, 91, 79, 0.52);
+      }
+      .intro-premium .intro-line-1 { animation-delay: 0.35s; }
+      .intro-premium .intro-line-2 { animation-delay: 1.55s; }
+      .intro-premium .intro-line-3 { animation-delay: 2.9s; }
+      .intro-premium .intro-line-4 { animation-delay: 4.2s; }
+      .intro-premium .intro-line-5 { animation-delay: 5.2s; }
+      @keyframes introPremiumLineFade {
+        from { opacity: 0; transform: translateY(10px); filter: blur(2px); }
+        to { opacity: 1; transform: translateY(0); filter: blur(0); }
+      }
+      .intro-premium .intro-bottom {
+        position: absolute;
+        left: clamp(28px, 7vw, 92px);
+        bottom: clamp(30px, 7vh, 72px);
+        z-index: 10;
+        align-items: flex-start;
+        margin: 0;
+        gap: 16px;
+        opacity: 0;
+        animation: introLineFade 1s ease forwards;
+        animation-delay: 3.2s;
+      }
+      .intro-premium .intro-day-counter {
+        color: rgba(229, 219, 198, 0.6);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+      .intro-premium .intro-start {
+        position: relative;
+        left: auto;
+        right: auto;
+        bottom: auto;
+        transform: none;
+        min-width: 210px;
+        min-height: 56px;
+        padding: 0 34px;
+        border-color: rgba(240, 196, 83, 0.68);
+        border-radius: 8px;
+        color: #fff7dc;
+        background:
+          linear-gradient(180deg, rgba(240, 196, 83, 0.3), rgba(81, 27, 22, 0.78)),
+          linear-gradient(90deg, #55191a, #9d3825 58%, #d0a04b);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.1) inset,
+          0 0 34px rgba(188, 42, 35, 0.46),
+          0 20px 54px rgba(0, 0, 0, 0.6);
+        font-weight: 900;
+        letter-spacing: 0.16em;
+        animation: home-start-breathe 2.2s ease-in-out infinite;
+      }
+      .banner .intro-scene.intro-premium .intro-start {
+        position: relative;
+        left: auto;
+        right: auto;
+        bottom: auto;
+        opacity: 1;
+        transform: none;
+        animation: home-start-breathe 2.2s ease-in-out infinite;
+      }
+      .intro-premium .intro-start:hover {
+        border-color: rgba(255, 224, 133, 0.95);
+        background:
+          linear-gradient(180deg, rgba(255, 216, 119, 0.42), rgba(106, 31, 24, 0.82)),
+          linear-gradient(90deg, #6a1f20, #b1442d 58%, #e2b85f);
+        box-shadow:
+          0 0 0 1px rgba(255, 255, 255, 0.14) inset,
+          0 0 46px rgba(206, 54, 42, 0.62),
+          0 24px 62px rgba(0, 0, 0, 0.64);
+      }
+      @media (max-width: 900px) {
+        .intro-scene.intro-premium {
+          background-position: 62% center;
+        }
+        .intro-chapter {
+          top: 18px;
+          right: 18px;
+          width: 180px;
+          padding: 10px 12px;
+        }
+        .intro-chapter-label {
+          font-size: 9px;
+        }
+        .intro-chapter strong {
+          font-size: 14px;
+        }
+        .intro-story.intro-dossier {
+          left: 22px;
+          right: 22px;
+          top: auto;
+          bottom: 176px;
+          width: auto;
+          transform: none;
+        }
+        .intro-dossier-kicker {
+          margin-bottom: 12px;
+          font-size: 10px;
+        }
+        .intro-premium .intro-line {
+          margin-bottom: 8px;
+          font-size: 16px;
+          line-height: 1.58;
+        }
+        .intro-premium .intro-bottom {
+          left: 22px;
+          bottom: 32px;
+          right: 22px;
+        }
+        .intro-premium .intro-start {
+          width: 100%;
+          min-height: 54px;
+        }
+      }
     </style>
   `;
   ui.banner.classList.remove("hidden");
@@ -729,10 +1389,22 @@ function showMainMenu() {
   clearSave();
   resetGame();
   game.mode = MODE.MENU;
+  ui.banner.classList.remove("result-screen", "result-success", "result-failure");
+  ui.banner.classList.add("home-menu");
   ui.banner.innerHTML = `
-    <h1>迷雾森林逃生</h1>
-    <p>黑暗森林已经苏醒，带上武器，找到逃生车。</p>
-    <button id="startBtn" type="button">开始游戏</button>
+    <div class="home-copy">
+      <span class="home-kicker">DAY 7 · SURVIVAL HORROR</span>
+      <h1>迷雾森林逃生</h1>
+      <p>车灯还亮着，森林深处的门已经打开。带上最后的子弹，别回头。</p>
+      <div class="home-actions">
+        <button id="startBtn" class="primary-start" type="button">开始游戏</button>
+        <span class="home-note">第七夜记录</span>
+      </div>
+    </div>
+    <div class="home-status" aria-hidden="true">
+      <span>入口线索残缺</span>
+      <strong>待定位</strong>
+    </div>
   `;
   ui.banner.classList.remove("hidden");
   draw();
@@ -740,6 +1412,8 @@ function showMainMenu() {
 
 function enterMaze() {
   game.phase = "maze";
+  game.nightmareEntrance = null;
+  game.questStage = Math.max(game.questStage || 0, 3);
   game.player.x = MAZE_START.x;
   game.player.y = MAZE_START.y;
   game.player.hp = 100;
@@ -754,17 +1428,20 @@ function enterMaze() {
   game.walls = buildMaze();
   game.hidden = false;
   updateCamera();
-  game.spawnTimer = 1.2;
+  game.spawnTimer = 10;
   game.ammoSpawnTimer = rand(CONFIG.ammo.mazeSpawnMin, CONFIG.ammo.mazeSpawnMax);
   game.chestSpawnTimer = rand(CONFIG.chest.mazeSpawnMin, CONFIG.chest.mazeSpawnMax);
-  setTask(1);
+  setTask(3);
 }
 
 function resetMazeKeys() {
   game.foundKeys = 0;
+  const weapon = currentWeapon();
   game.pickups = [
-    { type: "key", x: MAZE_TILE * 44.5, y: MAZE_TILE * 4.5, r: 11 },
-    { type: "key", x: MAZE_TILE * 5.5, y: MAZE_TILE * 30.5, r: 11 },
+    { type: "ammo", level: weapon.level, amount: Math.max(18, ammoPackSize(weapon.level) * 2), x: MAZE_TILE * 8.5, y: MAZE_TILE * 2.5, r: 13 },
+    { type: "medkit", level: 2, x: MAZE_TILE * 24.5, y: MAZE_TILE * 3.5, r: 15 },
+    { type: "key", x: MAZE_TILE * 44.5, y: MAZE_TILE * 4.5, r: 20 },
+    { type: "key", x: MAZE_TILE * 5.5, y: MAZE_TILE * 30.5, r: 20 },
   ];
 }
 
@@ -779,10 +1456,11 @@ function resetMazeRun() {
   game.muzzleFlashes = [];
   game.monsters = [];
   resetMazeKeys();
-  game.spawnTimer = 1.2;
+  game.walls = buildMaze();
+  game.spawnTimer = 10;
   game.ammoSpawnTimer = rand(CONFIG.ammo.mazeSpawnMin, CONFIG.ammo.mazeSpawnMax);
   game.chestSpawnTimer = rand(CONFIG.chest.mazeSpawnMin, CONFIG.chest.mazeSpawnMax);
-  setTask(1);
+  setTask(3);
   updateCamera();
   burst(game.player.x, game.player.y, "#7bc5ee", 20);
 }
@@ -801,6 +1479,7 @@ function returnToForest() {
   game.monsters = [];
   game.pickups = [];
   game.walls = [];
+  game.nightmareEntrance = null;
   game.car = { x: 1850, y: -920, w: 82, h: 46 };
   game.wreckCar = null;
   game.parkingLot = null;
@@ -810,12 +1489,12 @@ function returnToForest() {
   game.vehicleHp = CONFIG.vehicle.hp;
   game.vehicleDamageCooldown = 0;
   updateCamera();
-  game.spawnTimer = 0;
+  game.spawnTimer = 2.8;
   game.danger = 2 + (game.day - 1) * 0.75;
   game.chestSpawnTimer = rand(CONFIG.chest.forestSpawnMin, CONFIG.chest.forestSpawnMax);
-  spawnForestMonsters(6 + game.day * 2);
+  spawnForestMonsters(5 + game.day);
   if (game.day % CONFIG.boss.dayInterval === 0) spawnBossMonster();
-  setTask(3);
+  setTask(5);
 }
 
 function boardEscapeCar() {
@@ -827,6 +1506,7 @@ function boardEscapeCar() {
   game.player.speed = 340;
   game.player.r = 24;
   game.car = null;
+  game.monsters = [];
   game.parkingLot = {
     x: game.player.x + CONFIG.vehicle.parkingBaseX + game.day * CONFIG.vehicle.parkingDayX,
     y: game.player.y + CONFIG.vehicle.parkingBaseY + game.day * CONFIG.vehicle.parkingDayY,
@@ -840,6 +1520,7 @@ function boardEscapeCar() {
   setShopOpen(false);
   ui.weaponQuickbar.classList.add("hidden");
   spawnDrivingMonsters(CONFIG.vehicle.chaseCount + 1);
+  setTask(6);
 }
 
 function destroyEscapeCar() {
@@ -857,21 +1538,39 @@ function destroyEscapeCar() {
   setShopOpen(false);
   renderQuickbar();
   burst(game.player.x, game.player.y, "#e45b4f", 46);
+  setTask(7);
 }
 
 function completeDay() {
   running = false;
   game.mode = MODE.DAY_COMPLETE;
   game.won = true;
+  const weapon = currentWeapon();
+  const ammoKey = String(weapon.level);
+  const resupplyFloor = Math.max(ammoPackSize(weapon.level) * 2, weapon.level <= 3 ? 28 : 20);
+  game.ammo[ammoKey] = Math.min(MAX_AMMO, Math.max(game.ammo[ammoKey] || 0, resupplyFloor));
+  game.ammo["1"] = Math.min(MAX_AMMO, Math.max(game.ammo["1"] || 0, 30));
+  updateAmmoHud();
   writeSave(game);
   playSound("win");
   const nextDay = game.day + 1;
+  ui.banner.classList.remove("home-menu");
+  ui.banner.classList.add("result-screen", "result-success");
+  ui.banner.classList.remove("result-failure");
   ui.banner.innerHTML = `
-    <h1>第 ${game.day} 天完成</h1>
-    <p>你已经把车开到停车场。是否开启第 ${nextDay} 天？怪兽会变得更多。</p>
-    <div class="banner-actions">
-      <button id="nextDayBtn" type="button">确定</button>
-      <button id="mainMenuBtn" type="button">取消</button>
+    <div class="result-copy">
+      <span class="result-kicker">SURVIVED · DAY ${game.day}</span>
+      <h1>第 ${game.day} 天完成</h1>
+      <p>车停进了雨夜停车场。雾还没有散，下一天的怪物强度会继续上升。</p>
+      <div class="result-stats">
+        <span><b>${game.points}</b><em>剩余积分</em></span>
+        <span><b>${game.ownedWeapons.length}</b><em>已解锁武器</em></span>
+        <span><b>${nextDay}</b><em>下一天</em></span>
+      </div>
+      <div class="banner-actions">
+        <button id="nextDayBtn" type="button">进入第 ${nextDay} 天</button>
+        <button id="mainMenuBtn" type="button">返回首页</button>
+      </div>
     </div>
   `;
   ui.banner.classList.remove("hidden");
@@ -883,12 +1582,23 @@ function showFailure() {
   setShopOpen(false);
   game.mode = MODE.GAME_OVER;
   playSound("fail");
+  ui.banner.classList.remove("home-menu");
+  ui.banner.classList.add("result-screen", "result-failure");
+  ui.banner.classList.remove("result-success");
   ui.banner.innerHTML = `
-    <h1>逃生失败</h1>
-    <p>你在第 ${game.day} 天徒步前往停车场时被怪物击倒。</p>
-    <div class="banner-actions">
-      <button id="retryDayBtn" type="button">重来</button>
-      <button id="mainMenuBtn" type="button">退出</button>
+    <div class="result-copy">
+      <span class="result-kicker">SIGNAL LOST · DAY ${game.day}</span>
+      <h1>逃生失败</h1>
+      <p>你在第 ${game.day} 天倒下了。重来会保留低阶装备，高阶装备和积分会丢失。</p>
+      <div class="result-stats danger">
+        <span><b>低阶</b><em>装备保留</em></span>
+        <span><b>高阶</b><em>装备丢失</em></span>
+        <span><b>0</b><em>积分重置</em></span>
+      </div>
+      <div class="banner-actions">
+        <button id="retryDayBtn" type="button">重来当天</button>
+        <button id="mainMenuBtn" type="button">退出</button>
+      </div>
     </div>
   `;
   ui.banner.classList.remove("hidden");
@@ -1094,10 +1804,13 @@ function shoot() {
     y: muzzleY,
     angle,
     color: weapon.color,
-    life: 0.08,
-    maxLife: 0.08,
-    size: 24 + weapon.level * 2.2,
+    life: 0.11,
+    maxLife: 0.11,
+    size: 28 + weapon.level * 2.8,
+    level: weapon.level,
   });
+  muzzleBurst(muzzleX, muzzleY, angle, weapon);
+  game.screenShake = Math.max(game.screenShake, clamp(2.2 + weapon.level * 0.32, 2.6, 8.5));
   game.bullets.push({
     x: p.x + Math.cos(angle) * 22,
     y: p.y + Math.sin(angle) * 22,
@@ -1108,6 +1821,9 @@ function shoot() {
     weaponLevel: weapon.level,
     color: weapon.color,
     life: weapon.bulletLife,
+    maxLife: weapon.bulletLife,
+    angle,
+    trail: clamp(34 + weapon.level * 6, 42, 128),
   });
   game.shootCooldown = weapon.fireDelay;
 }
@@ -1169,7 +1885,7 @@ function monsterDamage(monster) {
 
 function blockingMonsterAt(circle) {
   if (game.phase !== "maze") return null;
-  return game.monsters.find((monster) => monster.kind === "small" && circleCircle(circle, monster)) || null;
+  return null;
 }
 
 function hitsBlockingMonster(circle) {
@@ -1203,6 +1919,7 @@ function damageVehicle(amount) {
 function damagePlayer(amount) {
   const p = game.player;
   if (p.damageCooldown > 0) return;
+  if (game.inWatchtower) return; // 瞭望塔内无敌
   p.hp = Math.max(0, p.hp - amount);
   p.damageCooldown = 0.55;
   game.screenShake = Math.max(game.screenShake, 13);
@@ -1216,7 +1933,7 @@ function damagePlayer(amount) {
   if (game.phase === "maze") {
     resetMazeRun();
   } else {
-    enterMaze();
+    showFailure();
   }
 }
 
@@ -1262,7 +1979,8 @@ function updateMonsters(dt) {
     }
 
     const protectedByBush = game.phase === "forest" && game.hidden && game.healingTimer <= 0;
-    if (dist(m, p) < m.r + p.r && !protectedByBush) {
+    const protectedByTower = game.phase === "forest" && game.inWatchtower;
+    if (dist(m, p) < m.r + p.r && !protectedByBush && !protectedByTower) {
       const damage = m.bite || monsterDamage(m);
       if (game.driving) damageVehicle(damage);
       else damagePlayer(damage);
@@ -1278,16 +1996,19 @@ function updateHits() {
       if (!m.dead && dist(b, m) < b.r + m.r) {
         b.life = 0;
         m.hp -= b.damage;
-        burst(m.x, m.y, "#e45b4f", 9);
+        burst(m.x, m.y, b.color || "#e45b4f", Math.min(24, 8 + Math.ceil(b.damage / 4)));
+        burst(m.x, m.y, "#fff7d1", Math.min(12, 3 + Math.ceil((b.weaponLevel || 1) / 2)));
+        game.screenShake = Math.max(game.screenShake, clamp(3 + (b.weaponLevel || 1) * 0.36, 3, 9));
         if (m.hp <= 0) {
           m.dead = true;
           const reward = m.kind === "boss"
             ? Math.max(120, (m.level || 1) * CONFIG.boss.rewardMultiplier)
-            : Math.max(5, (m.level || 1) * 5);
+            : Math.max(8, Math.round((m.level || 1) * 6 + (m.kind === "chaser" ? 4 : 0)));
           game.points += reward;
           writeSave(game);
           if (m.kind === "boss") playSound("win");
-          burst(m.x, m.y, "#5cc7ff", Math.min(30, 8 + reward));
+          burst(m.x, m.y, "#5cc7ff", Math.min(34, 8 + reward));
+          burst(m.x, m.y, b.color || "#f0c453", Math.min(32, 10 + (b.weaponLevel || 1) * 2));
           if (game.shopOpen) renderShop();
           renderQuickbar();
         }
@@ -1340,12 +2061,22 @@ function updatePickups() {
     onKey: (item) => {
       burst(item.x, item.y, "#f0c453", 16);
       playSound("pickup");
-      if (game.foundKeys >= 2) setTask(2);
+      if (game.foundKeys >= 2) setTask(4);
     },
   });
 
   if (game.phase === "maze" && game.door && game.foundKeys >= 2 && circleRect(game.player, game.door)) {
     returnToForest();
+  }
+
+  if (game.phase === "forest" && game.nightmareEntrance && (game.questStage || 0) >= 2) {
+    const entranceCenter = {
+      x: game.nightmareEntrance.x + game.nightmareEntrance.w / 2,
+      y: game.nightmareEntrance.y + game.nightmareEntrance.h / 2,
+    };
+    if (circleRect(game.player, game.nightmareEntrance) || dist(game.player, entranceCenter) < 105) {
+      enterMaze();
+    }
   }
 
   if (game.phase === "forest" && game.car && circleRect(game.player, game.car)) {
@@ -1379,6 +2110,28 @@ function burst(x, y, color, count) {
       vy: Math.sin(a) * rand(30, 150),
       life: rand(0.22, 0.55),
       color,
+      size: rand(2, 5.4),
+      angle: a,
+      spin: rand(-5.4, 5.4),
+    });
+  }
+}
+
+function muzzleBurst(x, y, angle, weapon) {
+  const count = clamp(7 + weapon.level * 1.2, 8, 24);
+  for (let i = 0; i < count; i += 1) {
+    const a = angle + rand(-0.58, 0.58);
+    const speed = rand(120, 310 + weapon.level * 14);
+    game.particles.push({
+      x,
+      y,
+      vx: Math.cos(a) * speed + rand(-22, 22),
+      vy: Math.sin(a) * speed + rand(-22, 22),
+      life: rand(0.12, 0.34),
+      color: i % 3 === 0 ? "#fff7d1" : weapon.color || "#f0c453",
+      size: rand(2.4, 7.2),
+      angle: a,
+      spin: rand(-9, 9),
     });
   }
 }
@@ -1391,6 +2144,7 @@ function updateParticles(dt) {
   game.particles.forEach((p) => {
     p.x += p.vx * dt;
     p.y += p.vy * dt;
+    p.angle = (p.angle || 0) + (p.spin || 0) * dt;
     p.life -= dt;
   });
   game.particles = game.particles.filter((p) => p.life > 0);
@@ -1398,10 +2152,11 @@ function updateParticles(dt) {
 
 function updateHud() {
   renderHud(ui, game, currentWeapon(), currentAmmo(), MAX_AMMO);
+  updateObjectiveHud();
 }
 
 function update(dt) {
-  if (game.mode === MODE.SHOP) {
+  if (game.mode !== MODE.PLAYING) {
     updateMouseWorld();
     updateHud();
     return;
@@ -1419,6 +2174,7 @@ function update(dt) {
   movePlayer(dt);
   updateBushHiding(dt);
   updateTentSearching(dt);
+  updateWatchtowerHiding(dt);
   if (!game.driving && isOnRockDebris(game.player)) damagePlayer(CONFIG.damage.rockDebris);
   updateBullets(dt);
   updateMonsters(dt);
@@ -1462,8 +2218,8 @@ function update(dt) {
     if (game.spawnTimer <= 0) {
       if (game.phase === "forest") {
         game.danger += (game.forestReturn ? 0.32 : 0.18) + (game.day - 1) * 0.04;
-        spawnForestMonsters((game.forestReturn ? 3 : 2) + Math.floor(game.day / 2));
-        game.spawnTimer = Math.max(0.9, (game.forestReturn ? 2.2 : 3.4) - (game.day - 1) * 0.18);
+        spawnForestMonsters((game.forestReturn ? 2 : 1) + Math.floor(game.day / 2));
+        game.spawnTimer = Math.max(1.25, (game.forestReturn ? 2.9 : 4.2) - (game.day - 1) * 0.16);
       } else {
         spawnMazeMonster();
         game.spawnTimer = rand(CONFIG.mazeMonsters.spawnMin, CONFIG.mazeMonsters.spawnMax);
@@ -1474,9 +2230,65 @@ function update(dt) {
   updateHud();
 }
 
+function drawForestTree(x, y, size, density, scene, seed) {
+  if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.deadTree, x, y, size * 3.4, size * 4.4, (seed - 0.5) * 0.45, 0.72 + density * 0.16)) return;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate((seed - 0.5) * 0.7);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.34)";
+  ctx.beginPath();
+  ctx.ellipse(0, size * 0.42, size * 0.82, size * 0.32, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const trunkGradient = ctx.createLinearGradient(0, -size * 0.35, 0, size * 0.72);
+  trunkGradient.addColorStop(0, scene.trunk);
+  trunkGradient.addColorStop(1, "#050807");
+  ctx.fillStyle = trunkGradient;
+  ctx.beginPath();
+  ctx.moveTo(-size * 0.12, size * 0.7);
+  ctx.lineTo(size * 0.1, size * 0.68);
+  ctx.lineTo(size * 0.07, -size * 0.38);
+  ctx.lineTo(-size * 0.08, -size * 0.38);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "rgba(5, 8, 7, 0.72)";
+  ctx.lineWidth = Math.max(2, size * 0.06);
+  ctx.lineCap = "round";
+  for (let i = 0; i < 5; i += 1) {
+    const branchAngle = -1.65 + i * 0.82 + seed * 0.35;
+    const branchLength = size * (0.34 + seededNoise(seed + i, i) * 0.34);
+    const baseY = -size * (0.08 + i * 0.065);
+    ctx.beginPath();
+    ctx.moveTo(0, baseY);
+    ctx.lineTo(Math.cos(branchAngle) * branchLength, baseY + Math.sin(branchAngle) * branchLength * 0.72);
+    ctx.stroke();
+  }
+  const crownColor = density > 0.72 ? "rgba(38, 55, 48, 0.78)" : "rgba(18, 28, 25, 0.82)";
+  const crownAccent = scene.weather === "redmoon" || scene.weather === "embers" ? "rgba(95, 24, 27, 0.52)" : "rgba(38, 72, 62, 0.48)";
+  for (let i = 0; i < 8; i += 1) {
+    const angle = (Math.PI * 2 * i) / 8 + seed * 3;
+    const leafX = Math.cos(angle) * size * 0.2;
+    const leafY = Math.sin(angle) * size * 0.18 - size * 0.22;
+    ctx.fillStyle = i % 3 === 0 ? crownAccent : crownColor;
+    ctx.globalAlpha = 0.44 + density * 0.18;
+    ctx.beginPath();
+    ctx.ellipse(leafX, leafY, size * 0.24, size * 0.48, angle + Math.PI / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = "rgba(140, 16, 24, 0.24)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.arc(0, -size * 0.12, size * 0.82, 0.18, Math.PI * 1.08);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawForest() {
   const scene = game.scene || sceneForDay(game.day);
   ctx.fillStyle = scene.ground;
+  ctx.fillRect(game.camera.x, game.camera.y, W, H);
+  drawTiledVisual(visualAssets.forestGround, game.camera.x - 160, game.camera.y - 160, W + 320, H + 320, 720, 0.54, "source-over");
+  ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
   ctx.fillRect(game.camera.x, game.camera.y, W, H);
   const left = game.camera.x - 120;
   const top = game.camera.y - 120;
@@ -1491,12 +2303,7 @@ function drawForest() {
       const x = gx * 96 + seededNoise(gx + 3, gy) * 76;
       const y = gy * 96 + seededNoise(gx, gy + 7) * 76;
       const size = 18 + seededNoise(gx + 9, gy + 11) * 18;
-      ctx.fillStyle = density > 0.72 ? scene.treeLight : scene.treeDark;
-      ctx.beginPath();
-      ctx.arc(x, y, size, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = scene.trunk;
-      ctx.fillRect(x - 3, y + size * 0.45, 6, 20);
+      drawForestTree(x, y, size, density, scene, seededNoise(gx - 17, gy + 23));
     }
   }
   ctx.fillStyle = scene.light;
@@ -1521,15 +2328,29 @@ function drawForestDecor() {
       drawDecorItem(decor);
     }
   }
+  if (isOpeningForestQuestActive()) {
+    if (game.storyTent) drawDecorItem(game.storyTent);
+    if (game.storyWatchtower) drawDecorItem(game.storyWatchtower);
+  }
 }
 
 function drawDecorItem(item) {
+  const isStoryTentTarget = isOpeningForestQuestActive() && item.type === "tent" && item.key === game.storyTent?.key && (game.questStage || 0) <= 0;
+  const isStoryTowerTarget = isOpeningForestQuestActive() && item.type === "watchtower" && item.key === game.storyWatchtower?.key && game.questStage === 1;
+  const isNearbyTent = item.type === "tent" && item.key && item.key === game.nearTent?.key && !game.searchedTents?.has(item.key);
+  const isNearbyTower = item.type === "watchtower" && item.key && item.key === game.nearWatchtower?.key && !game.searchedWatchtowers?.has(item.key);
+  if (isStoryTentTarget || isNearbyTent) drawWorldPulse(item.x, item.y, 58, "#f0c453", isStoryTentTarget ? 1 : 0.74);
+  if (isStoryTowerTarget || isNearbyTower) drawWorldPulse(item.x, item.y - 10, 72, "#6ce4ff", isStoryTowerTarget ? 1 : 0.76);
   ctx.save();
   ctx.translate(item.x, item.y);
   ctx.rotate((item.seed - 0.5) * Math.PI);
   ctx.globalAlpha = 0.9;
   if (item.type === "tent") {
     const searched = item.key && game.searchedTents?.has(item.key);
+    if (drawAtlasSprite(visualAssets.worldProps, 4, 4, searched ? WORLD_PROP.collapsedTent : WORLD_PROP.tent, 0, 0, 112, 112, 0, 1)) {
+      ctx.restore();
+      return;
+    }
     if (searched) {
       // 搜刮后的帐篷：倒塌、破旧
       ctx.fillStyle = "#2a1f18";
@@ -1570,8 +2391,18 @@ function drawDecorItem(item) {
       ctx.lineTo(16, 18);
       ctx.closePath();
       ctx.fill();
+      // 未搜刮帐篷的微弱发光提示
+      const tentGlow = 0.15 + Math.sin(performance.now() / 400) * 0.1;
+      ctx.fillStyle = `rgba(255, 200, 100, ${tentGlow})`;
+      ctx.beginPath();
+      ctx.arc(0, -5, 8, 0, Math.PI * 2);
+      ctx.fill();
     }
   } else if (item.type === "log") {
+    if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.log, 0, 0, 108, 82, 0, 1)) {
+      ctx.restore();
+      return;
+    }
     ctx.fillStyle = "#3b2418";
     ctx.fillRect(-42, -9, 84, 18);
     ctx.fillStyle = "#6b4327";
@@ -1580,6 +2411,10 @@ function drawDecorItem(item) {
     ctx.ellipse(43, 0, 9, 11, 0, 0, Math.PI * 2);
     ctx.fill();
   } else if (item.type === "bones") {
+    if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.bones, 0, 0, 96, 86, 0, 1)) {
+      ctx.restore();
+      return;
+    }
     ctx.strokeStyle = "#d8d3bd";
     ctx.lineWidth = 6;
     ctx.lineCap = "round";
@@ -1597,6 +2432,10 @@ function drawDecorItem(item) {
       ctx.fill();
     });
   } else if (item.type === "crate") {
+    if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.crate, 0, 0, 88, 76, 0, 1)) {
+      ctx.restore();
+      return;
+    }
     ctx.fillStyle = "#5b3b22";
     ctx.fillRect(-24, -22, 48, 44);
     ctx.strokeStyle = "#27180e";
@@ -1609,6 +2448,10 @@ function drawDecorItem(item) {
     ctx.lineTo(-22, 20);
     ctx.stroke();
   } else if (item.type === "sign") {
+    if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.sign, 0, 0, 82, 100, 0, 1)) {
+      ctx.restore();
+      return;
+    }
     ctx.fillStyle = "#2a1b12";
     ctx.fillRect(-4, -5, 8, 44);
     ctx.fillStyle = "#6f4a2a";
@@ -1616,6 +2459,90 @@ function drawDecorItem(item) {
     ctx.strokeStyle = "#1a0f09";
     ctx.lineWidth = 3;
     ctx.strokeRect(-30, -24, 60, 24);
+  } else if (item.type === "watchtower") {
+    const searched = item.key && game.searchedWatchtowers?.has(item.key);
+    if (drawAtlasSprite(visualAssets.objectiveIcons, 3, 3, OBJECTIVE_ICON.watchtower, 0, -8, 118, 118, 0, searched ? 0.68 : 1)) {
+      if (!searched) {
+        const glowIntensity = 0.18 + Math.sin(performance.now() / 300) * 0.08;
+        ctx.fillStyle = `rgba(255, 220, 100, ${glowIntensity})`;
+        ctx.beginPath();
+        ctx.arc(0, -12, 44, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      return;
+    }
+    if (searched) {
+      // 搜刮后的瞭望塔：破旧、倾斜
+      ctx.fillStyle = "#3a3028";
+      // 倾斜的塔身
+      ctx.beginPath();
+      ctx.moveTo(-18, 50);
+      ctx.lineTo(-12, -30);
+      ctx.lineTo(8, -25);
+      ctx.lineTo(14, 50);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "#1a1510";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      // 破损的瞭望台
+      ctx.fillStyle = "#2a2018";
+      ctx.beginPath();
+      ctx.moveTo(-16, -25);
+      ctx.lineTo(-10, -55);
+      ctx.lineTo(6, -50);
+      ctx.lineTo(12, -25);
+      ctx.closePath();
+      ctx.fill();
+      // 破洞
+      ctx.fillStyle = "#0d0907";
+      ctx.beginPath();
+      ctx.moveTo(-8, -40);
+      ctx.lineTo(2, -35);
+      ctx.lineTo(4, -45);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      // 未搜刮的瞭望塔
+      ctx.fillStyle = "#4a3f35";
+      // 塔身
+      ctx.fillRect(-16, -10, 32, 60);
+      // 瞭望台
+      ctx.fillStyle = "#5a4a3a";
+      ctx.beginPath();
+      ctx.moveTo(-20, -10);
+      ctx.lineTo(-16, -50);
+      ctx.lineTo(16, -50);
+      ctx.lineTo(20, -10);
+      ctx.closePath();
+      ctx.fill();
+      // 屋顶
+      ctx.fillStyle = "#3a3028";
+      ctx.beginPath();
+      ctx.moveTo(-22, -50);
+      ctx.lineTo(0, -75);
+      ctx.lineTo(22, -50);
+      ctx.closePath();
+      ctx.fill();
+      // 窗户（发光，脉冲效果）
+      const glowIntensity = 0.4 + Math.sin(performance.now() / 300) * 0.3;
+      ctx.fillStyle = `rgba(255, 220, 100, ${glowIntensity})`;
+      ctx.fillRect(-8, -40, 16, 12);
+      // 梯子横档
+      ctx.strokeStyle = "#2a2018";
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 5; i += 1) {
+        ctx.beginPath();
+        ctx.moveTo(-14, 5 + i * 10);
+        ctx.lineTo(14, 5 + i * 10);
+        ctx.stroke();
+      }
+      // 边框
+      ctx.strokeStyle = "#1a1510";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-16, -10, 32, 60);
+    }
   } else {
     ctx.fillStyle = "rgba(0,0,0,0.35)";
     ctx.beginPath();
@@ -1641,6 +2568,7 @@ function drawForestFeatures(layer) {
   features.forEach((feature) => {
     if (feature.type === "rock" && layer === "base") {
       if (game.brokenRocks.has(feature.key)) {
+        if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.rubble, feature.x, feature.y, feature.r * 2.8, feature.r * 2.25, feature.seed * Math.PI, 0.95)) return;
         ctx.save();
         ctx.translate(feature.x, feature.y);
         ctx.rotate(feature.seed * Math.PI);
@@ -1657,6 +2585,24 @@ function drawForestFeatures(layer) {
         return;
       }
       const rockHits = game.rockHits[feature.key] || 0;
+      if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.rock, feature.x, feature.y, feature.r * 2.4, feature.r * 2.05, feature.seed * Math.PI, 0.96)) {
+        if (rockHits > 0) {
+          ctx.save();
+          ctx.translate(feature.x, feature.y);
+          ctx.rotate(feature.seed * Math.PI);
+          ctx.strokeStyle = "rgba(255, 210, 154, 0.34)";
+          ctx.lineWidth = 2;
+          for (let i = 0; i < Math.min(5, Math.ceil(rockHits / 2)); i += 1) {
+            const crackAngle = -0.8 + i * 0.4;
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(crackAngle) * feature.r * 0.1, Math.sin(crackAngle) * feature.r * 0.1);
+            ctx.lineTo(Math.cos(crackAngle) * feature.r * (0.35 + i * 0.08), Math.sin(crackAngle) * feature.r * (0.45 + i * 0.04));
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+        return;
+      }
       ctx.save();
       ctx.translate(feature.x, feature.y);
       ctx.rotate(feature.seed * Math.PI);
@@ -1691,6 +2637,7 @@ function drawForestFeatures(layer) {
     if (feature.type === "bush" && (layer === "base" || layer === "cover")) {
       const alpha = layer === "cover" ? 0.68 : 0.82;
       const radius = layer === "cover" ? feature.r * 0.94 : feature.r;
+      if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.bush, feature.x, feature.y, radius * 2.25, radius * 2.05, feature.seed * Math.PI, alpha)) return;
       ctx.save();
       ctx.globalAlpha = alpha;
       ctx.translate(feature.x, feature.y);
@@ -1715,7 +2662,10 @@ function drawForestFeatures(layer) {
 function drawMaze() {
   ctx.fillStyle = "#171818";
   ctx.fillRect(game.camera.x, game.camera.y, W, H);
-  ctx.strokeStyle = "rgba(255,255,255,0.04)";
+  drawTiledVisual(visualAssets.mazeStone, game.camera.x - 96, game.camera.y - 96, W + 192, H + 192, 640, 0.5, "source-over");
+  ctx.fillStyle = "rgba(3, 5, 6, 0.24)";
+  ctx.fillRect(game.camera.x, game.camera.y, W, H);
+  ctx.strokeStyle = "rgba(151, 199, 207, 0.045)";
   const startX = Math.floor(game.camera.x / 32) * 32;
   const startY = Math.floor(game.camera.y / 32) * 32;
   for (let x = startX; x < game.camera.x + W + 32; x += 32) {
@@ -1733,13 +2683,18 @@ function drawMaze() {
   ctx.fillStyle = "#353735";
   game.walls.forEach((wall) => {
     if (wall.x + wall.w < game.camera.x - 80 || wall.x > game.camera.x + W + 80 || wall.y + wall.h < game.camera.y - 80 || wall.y > game.camera.y + H + 80) return;
-    ctx.fillStyle = "rgba(0,0,0,0.28)";
-    ctx.fillRect(wall.x + 4, wall.y + 5, wall.w, wall.h);
-    ctx.fillStyle = "#353735";
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.fillRect(wall.x + 5, wall.y + 7, wall.w, wall.h);
+    const wallGradient = ctx.createLinearGradient(wall.x, wall.y, wall.x + wall.w, wall.y + wall.h);
+    wallGradient.addColorStop(0, "#46504c");
+    wallGradient.addColorStop(0.48, "#242a29");
+    wallGradient.addColorStop(1, "#111516");
+    ctx.fillStyle = wallGradient;
     ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
-    ctx.fillStyle = "#414642";
+    ctx.fillStyle = "rgba(130, 158, 152, 0.12)";
     ctx.fillRect(wall.x + 3, wall.y + 3, Math.max(0, wall.w - 6), Math.max(0, wall.h - 6));
-    ctx.strokeStyle = "rgba(16, 18, 17, 0.55)";
+    ctx.strokeStyle = "rgba(3, 5, 5, 0.7)";
     ctx.lineWidth = 2;
     const brickH = 12;
     for (let y = wall.y + brickH; y < wall.y + wall.h; y += brickH) {
@@ -1759,14 +2714,24 @@ function drawMaze() {
     }
     const crack = seededNoise(Math.floor(wall.x / MAZE_TILE) + 401, Math.floor(wall.y / MAZE_TILE) - 313);
     if (crack > 0.84) {
-      ctx.strokeStyle = "rgba(5, 6, 6, 0.5)";
+      ctx.strokeStyle = "rgba(5, 6, 6, 0.72)";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(wall.x + 12, wall.y + 9);
       ctx.lineTo(wall.x + 25, wall.y + 21);
       ctx.lineTo(wall.x + 17, wall.y + 34);
       ctx.stroke();
+      ctx.strokeStyle = "rgba(165, 32, 31, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(wall.x + 11, wall.y + 9);
+      ctx.lineTo(wall.x + 24, wall.y + 22);
+      ctx.stroke();
     }
+    ctx.strokeStyle = "rgba(226, 194, 121, 0.08)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(wall.x + 0.5, wall.y + 0.5, wall.w - 1, wall.h - 1);
+    ctx.restore();
     ctx.fillStyle = "#353735";
   });
 }
@@ -1778,46 +2743,110 @@ function drawPlayer() {
   ctx.rotate(p.angle);
   if (game.driving) {
     const vehicleRatio = clamp(game.vehicleHp / CONFIG.vehicle.hp, 0, 1);
-    ctx.fillStyle = vehicleRatio > 0.45 ? "#4aa3df" : "#8d3a35";
-    ctx.fillRect(-28, -16, 56, 32);
-    ctx.fillStyle = "#d7efff";
-    ctx.fillRect(-10, -21, 24, 42);
-    ctx.fillStyle = "#0d1111";
+    if (drawAtlasSprite(visualAssets.worldProps, 4, 4, vehicleRatio > 0.24 ? WORLD_PROP.car : WORLD_PROP.wreckCar, 0, 0, 90, 116, Math.PI / 2, 1)) {
+      ctx.fillStyle = "rgba(255, 240, 178, 0.72)";
+      ctx.beginPath();
+      ctx.moveTo(30, -12);
+      ctx.lineTo(70, -30);
+      ctx.lineTo(70, -12);
+      ctx.closePath();
+      ctx.moveTo(30, 12);
+      ctx.lineTo(70, 30);
+      ctx.lineTo(70, 12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(0,0,0,0.62)";
+      ctx.fillRect(-32, -38, 64, 6);
+      ctx.fillStyle = vehicleRatio > 0.45 ? "#7ae0a6" : "#e45b4f";
+      ctx.fillRect(-32, -38, 64 * vehicleRatio, 6);
+      ctx.restore();
+      return;
+    }
+    ctx.shadowBlur = vehicleRatio > 0.45 ? 18 : 26;
+    ctx.shadowColor = vehicleRatio > 0.45 ? "#5cc7ff" : "#e45b4f";
+    const body = ctx.createLinearGradient(-34, -22, 34, 22);
+    body.addColorStop(0, vehicleRatio > 0.45 ? "#1b536d" : "#4c1d1a");
+    body.addColorStop(0.48, "#101719");
+    body.addColorStop(1, vehicleRatio > 0.45 ? "#4aa3df" : "#8d3a35");
+    ctx.fillStyle = body;
     ctx.beginPath();
-    ctx.arc(-16, -18, 7, 0, Math.PI * 2);
-    ctx.arc(-16, 18, 7, 0, Math.PI * 2);
-    ctx.arc(18, -18, 7, 0, Math.PI * 2);
-    ctx.arc(18, 18, 7, 0, Math.PI * 2);
+    ctx.roundRect(-34, -18, 68, 36, 7);
     ctx.fill();
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(-28, -31, 56, 5);
+    ctx.fillStyle = "rgba(215, 239, 255, 0.78)";
+    ctx.beginPath();
+    ctx.roundRect(-12, -24, 28, 48, 5);
+    ctx.fill();
+    ctx.fillStyle = "#080b0c";
+    ctx.beginPath();
+    ctx.arc(-22, -20, 7, 0, Math.PI * 2);
+    ctx.arc(-22, 20, 7, 0, Math.PI * 2);
+    ctx.arc(22, -20, 7, 0, Math.PI * 2);
+    ctx.arc(22, 20, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255, 240, 178, 0.72)";
+    ctx.beginPath();
+    ctx.moveTo(30, -12);
+    ctx.lineTo(66, -30);
+    ctx.lineTo(66, -12);
+    ctx.closePath();
+    ctx.moveTo(30, 12);
+    ctx.lineTo(66, 30);
+    ctx.lineTo(66, 12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(0,0,0,0.62)";
+    ctx.fillRect(-32, -34, 64, 6);
     ctx.fillStyle = vehicleRatio > 0.45 ? "#7ae0a6" : "#e45b4f";
-    ctx.fillRect(-28, -31, 56 * vehicleRatio, 5);
+    ctx.fillRect(-32, -34, 64 * vehicleRatio, 6);
     ctx.restore();
     return;
   }
   if (game.hidden) ctx.globalAlpha = 0.58;
-  ctx.fillStyle = "#7bc5ee";
+  ctx.fillStyle = "rgba(0,0,0,0.36)";
   ctx.beginPath();
-  ctx.arc(0, 0, p.r, 0, Math.PI * 2);
+  ctx.ellipse(0, 9, p.r * 1.18, p.r * 0.52, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = "#f2d1a0";
+  const coat = ctx.createLinearGradient(-p.r, -p.r, p.r, p.r);
+  coat.addColorStop(0, "#9fd7ef");
+  coat.addColorStop(0.45, "#355766");
+  coat.addColorStop(1, "#121b21");
+  ctx.fillStyle = coat;
   ctx.beginPath();
-  ctx.arc(5, -2, 8, 0, Math.PI * 2);
+  ctx.ellipse(-1, 1, p.r * 0.72, p.r * 1.02, 0, 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = "rgba(240, 196, 83, 0.34)";
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.fillStyle = "#e9c59b";
+  ctx.beginPath();
+  ctx.arc(6, -2, 7.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.52)";
+  ctx.fillRect(1, -9, 12, 5);
   if (game.healingTimer > 0) {
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "#7ae0a6";
     ctx.fillStyle = "#e8f6ee";
-    ctx.fillRect(12, -9, 23, 18);
+    ctx.beginPath();
+    ctx.roundRect(12, -10, 24, 20, 4);
+    ctx.fill();
     ctx.fillStyle = "#7ae0a6";
     ctx.fillRect(20, -13, 6, 26);
     ctx.fillRect(10, -3, 26, 6);
     ctx.restore();
     return;
   }
-  ctx.fillStyle = "#dad7c7";
-  ctx.fillRect(12, -4, 24, 8);
-  ctx.fillStyle = "#2b2e35";
-  ctx.fillRect(30, -3, 12, 6);
+  ctx.shadowBlur = 14;
+  ctx.shadowColor = currentWeapon().color || "#f0c453";
+  ctx.fillStyle = "#d7d2c1";
+  ctx.beginPath();
+  ctx.roundRect(11, -4.5, 26, 9, 3);
+  ctx.fill();
+  ctx.fillStyle = "#1b2028";
+  ctx.fillRect(31, -3.2, 15, 6.4);
+  ctx.fillStyle = currentWeapon().color || "#f0c453";
+  ctx.fillRect(45, -2, 6, 4);
   ctx.restore();
 }
 
@@ -1936,31 +2965,52 @@ function drawMonstersOld() {
 
 function drawItems() {
   game.pickups.forEach((item) => {
+    const playerDistance = dist(item, game.player);
+    if (item.type === "key") {
+      drawWorldPulse(item.x, item.y, playerDistance < 150 ? 52 : 42, "#f0c453", playerDistance < 150 ? 1 : 0.82);
+    } else if (playerDistance < 140) {
+      const tone = item.type === "ammo" ? "#5cc7ff" : item.type === "medkit" ? "#7ae0a6" : "#f0c453";
+      drawWorldPulse(item.x, item.y, item.type === "chest" ? 42 : 34, tone, 0.72);
+    }
     ctx.save();
     ctx.translate(item.x, item.y);
     if (item.type === "ammo") {
-      ctx.shadowBlur = 18;
+      const pulse = 0.55 + Math.sin(performance.now() / 180 + item.level) * 0.2;
+      ctx.shadowBlur = 24;
       ctx.shadowColor = "#5cc7ff";
-      ctx.fillStyle = "rgba(92, 199, 255, 0.22)";
+      ctx.strokeStyle = `rgba(92, 199, 255, ${0.42 + pulse * 0.32})`;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(0, 0, 24, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#f0c453";
-      ctx.fillRect(-13, -7, 9, 20);
-      ctx.fillRect(-2, -11, 9, 24);
-      ctx.fillRect(9, -6, 9, 19);
-      ctx.fillStyle = "#e7f5ff";
+      ctx.arc(0, 0, 29 + pulse * 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(92, 199, 255, 0.18)";
       ctx.beginPath();
-      ctx.moveTo(-13, -7);
-      ctx.lineTo(-8, -17);
-      ctx.lineTo(-4, -7);
-      ctx.moveTo(-2, -11);
-      ctx.lineTo(3, -22);
-      ctx.lineTo(7, -11);
-      ctx.moveTo(9, -6);
-      ctx.lineTo(14, -16);
-      ctx.lineTo(18, -6);
+      ctx.arc(0, 0, 27, 0, Math.PI * 2);
       ctx.fill();
+      [-12, 0, 12].forEach((offset, index) => {
+        ctx.save();
+        ctx.translate(offset, index === 1 ? -5 : 0);
+        ctx.rotate((index - 1) * 0.12);
+        const casing = ctx.createLinearGradient(-7, -15, 8, 14);
+        casing.addColorStop(0, "#fff7d1");
+        casing.addColorStop(0.42, "#f0c453");
+        casing.addColorStop(1, "#9b5c20");
+        ctx.fillStyle = casing;
+        ctx.strokeStyle = item.level >= 6 ? "#7ee9ff" : "#f0c453";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(-6, -7, 12, 22 + index * 3, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#eef6ee";
+        ctx.beginPath();
+        ctx.moveTo(-6, -7);
+        ctx.lineTo(0, -18 - index * 3);
+        ctx.lineTo(6, -7);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      });
       ctx.fillStyle = "#5cc7ff";
       ctx.font = "900 11px Arial";
       ctx.textAlign = "center";
@@ -1975,6 +3025,14 @@ function drawItems() {
       ctx.beginPath();
       ctx.arc(0, 0, 25, 0, Math.PI * 2);
       ctx.fill();
+      if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.medkit, 0, 0, 58, 50, 0, 1)) {
+        ctx.fillStyle = "#7ae0a6";
+        ctx.font = "900 11px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText(`L${item.level}`, 0, 31);
+        ctx.restore();
+        return;
+      }
       ctx.fillStyle = "#e8f6ee";
       ctx.fillRect(-15, -13, 30, 26);
       ctx.fillStyle = "#7ae0a6";
@@ -1997,6 +3055,10 @@ function drawItems() {
       ctx.beginPath();
       ctx.arc(0, 0, 29, 0, Math.PI * 2);
       ctx.fill();
+      if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.chest, 0, -2, 68, 58, 0, 1)) {
+        ctx.restore();
+        return;
+      }
       ctx.fillStyle = "#6b3f24";
       ctx.fillRect(-20, -12, 40, 28);
       ctx.fillStyle = "#9a5c2e";
@@ -2017,75 +3079,249 @@ function drawItems() {
       ctx.restore();
       return;
     }
-    ctx.shadowBlur = 18;
+    const pulse = 0.65 + Math.sin(performance.now() / 220 + item.x * 0.01) * 0.18;
+    ctx.shadowBlur = 24;
     ctx.shadowColor = "#f0c453";
-    ctx.fillStyle = "#f0c453";
+    ctx.strokeStyle = `rgba(240, 196, 83, ${0.34 + pulse * 0.24})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 25 + pulse * 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(240, 196, 83, 0.12)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 23, 0, Math.PI * 2);
+    ctx.fill();
+    if (drawAtlasSprite(visualAssets.objectiveIcons, 3, 3, OBJECTIVE_ICON.key, 0, 0, 62, 62, -0.18, 1)) {
+      ctx.restore();
+      return;
+    }
+    const keyGradient = ctx.createLinearGradient(-12, -10, 28, 12);
+    keyGradient.addColorStop(0, "#fff7d1");
+    keyGradient.addColorStop(0.45, "#f0c453");
+    keyGradient.addColorStop(1, "#8c4f1c");
+    ctx.fillStyle = keyGradient;
     ctx.beginPath();
     ctx.arc(-4, 0, 7, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillRect(2, -3, 20, 6);
-    ctx.fillRect(15, 1, 4, 8);
-    ctx.fillRect(21, 1, 4, 8);
+    ctx.fillRect(2, -3, 24, 6);
+    ctx.fillRect(17, 1, 4, 9);
+    ctx.fillRect(24, 1, 4, 9);
+    ctx.strokeStyle = "rgba(255, 247, 209, 0.72)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(-4, 0, 13, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   });
 
   if (game.door) {
+    const doorCenter = rectCenter(game.door);
+    if (game.foundKeys >= 2 || distanceToRectCenter(game.door) < 190) {
+      drawWorldPulse(doorCenter.x, doorCenter.y, game.door.w * 0.88, game.foundKeys >= 2 ? "#7ae0a6" : "#f0c453", game.foundKeys >= 2 ? 0.95 : 0.62);
+    }
     ctx.save();
-    ctx.shadowBlur = game.foundKeys >= 2 ? 26 : 10;
-    ctx.shadowColor = game.foundKeys >= 2 ? "#7ae0a6" : "#f0c453";
-    ctx.fillStyle = game.foundKeys >= 2 ? "#5a9b74" : "#5c3c2f";
-    ctx.fillRect(game.door.x, game.door.y, game.door.w, game.door.h);
-    ctx.strokeStyle = game.foundKeys >= 2 ? "#7ae0a6" : "#2a1710";
-    ctx.lineWidth = 5;
-    ctx.strokeRect(game.door.x, game.door.y, game.door.w, game.door.h);
-    ctx.fillStyle = "#f0c453";
+    const unlocked = game.foundKeys >= 2;
+    const doorCenterX = game.door.x + game.door.w / 2;
+    const doorCenterY = game.door.y + game.door.h / 2;
+    ctx.shadowBlur = unlocked ? 28 : 14;
+    ctx.shadowColor = unlocked ? "#7ae0a6" : "#f0c453";
+    if (drawAtlasSprite(
+      visualAssets.objectiveIcons,
+      3,
+      3,
+      unlocked ? OBJECTIVE_ICON.unlockedDoor : OBJECTIVE_ICON.lockedDoor,
+      doorCenterX,
+      doorCenterY,
+      game.door.w * 1.55,
+      game.door.h * 1.55,
+      0,
+      1,
+    )) {
+      ctx.strokeStyle = unlocked ? "rgba(122, 224, 166, 0.78)" : "rgba(240, 196, 83, 0.62)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(doorCenterX, doorCenterY, game.door.w * 0.74, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = unlocked ? "#5a9b74" : "#5c3c2f";
+      ctx.fillRect(game.door.x, game.door.y, game.door.w, game.door.h);
+      ctx.strokeStyle = unlocked ? "#7ae0a6" : "#2a1710";
+      ctx.lineWidth = 5;
+      ctx.strokeRect(game.door.x, game.door.y, game.door.w, game.door.h);
+      ctx.fillStyle = "#f0c453";
+      ctx.beginPath();
+      ctx.arc(game.door.x + 47, game.door.y + 32, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  if (game.nightmareEntrance) {
+    const gate = game.nightmareEntrance;
+    const gateCenter = rectCenter(gate);
+    drawWorldPulse(gateCenter.x, gateCenter.y, gate.w * 0.72, "#a048ff", distanceToRectCenter(gate) < 190 ? 1 : 0.82);
+    ctx.save();
+    const centerX = gate.x + gate.w / 2;
+    const centerY = gate.y + gate.h / 2;
+    const pulse = 0.55 + Math.sin(performance.now() / 280) * 0.16;
+    const glow = ctx.createRadialGradient(centerX, centerY, 8, centerX, centerY, 128);
+    glow.addColorStop(0, `rgba(160, 72, 255, ${0.26 + pulse * 0.18})`);
+    glow.addColorStop(1, "rgba(160, 72, 255, 0)");
+    ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(game.door.x + 47, game.door.y + 32, 4, 0, Math.PI * 2);
+    ctx.arc(centerX, centerY, 128, 0, Math.PI * 2);
     ctx.fill();
+    if (drawAtlasSprite(visualAssets.objectiveIcons, 3, 3, OBJECTIVE_ICON.portal, centerX, centerY, gate.w * 1.7, gate.h * 1.7, 0, 0.98)) {
+      ctx.strokeStyle = `rgba(213, 169, 255, ${0.36 + pulse * 0.28})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, gate.w * 0.64, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.translate(centerX, centerY);
+      ctx.fillStyle = "#171018";
+      ctx.beginPath();
+      ctx.ellipse(0, 12, gate.w * 0.48, gate.h * 0.38, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#8f58ff";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(0, 4, gate.w * 0.32, Math.PI * 0.1, Math.PI * 0.9, true);
+      ctx.lineTo(-gate.w * 0.3, 28);
+      ctx.lineTo(gate.w * 0.3, 28);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fillStyle = "rgba(213, 169, 255, 0.82)";
+      ctx.font = "900 13px Inter, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("入口", 0, 54);
+    }
     ctx.restore();
   }
 
   if (game.car) {
-    ctx.fillStyle = "#4aa3df";
-    ctx.fillRect(game.car.x, game.car.y + 10, game.car.w, game.car.h - 10);
-    ctx.fillStyle = "#d7efff";
-    ctx.fillRect(game.car.x + 18, game.car.y, 44, 22);
-    ctx.fillStyle = "#0d1111";
-    ctx.beginPath();
-    ctx.arc(game.car.x + 18, game.car.y + 46, 8, 0, Math.PI * 2);
-    ctx.arc(game.car.x + 64, game.car.y + 46, 8, 0, Math.PI * 2);
-    ctx.fill();
+    const carCenter = rectCenter(game.car);
+    drawWorldPulse(carCenter.x, carCenter.y, 72, "#5cc7ff", distanceToRectCenter(game.car) < 210 ? 1 : 0.72);
+    ctx.save();
+    const carX = game.car.x;
+    const carY = game.car.y;
+    ctx.shadowBlur = 22;
+    ctx.shadowColor = "#5cc7ff";
+    if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.car, carX + game.car.w / 2, carY + game.car.h / 2, 124, 90, Math.PI / 2, 1)) {
+      ctx.fillStyle = "rgba(255, 236, 154, 0.6)";
+      ctx.beginPath();
+      ctx.moveTo(carX + game.car.w - 4, carY + 17);
+      ctx.lineTo(carX + game.car.w + 50, carY + 0);
+      ctx.lineTo(carX + game.car.w + 50, carY + 20);
+      ctx.closePath();
+      ctx.moveTo(carX + game.car.w - 4, carY + 35);
+      ctx.lineTo(carX + game.car.w + 50, carY + 52);
+      ctx.lineTo(carX + game.car.w + 50, carY + 32);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    } else {
+      const carBody = ctx.createLinearGradient(carX, carY, carX + game.car.w, carY + game.car.h);
+      carBody.addColorStop(0, "#173344");
+      carBody.addColorStop(0.52, "#0c1114");
+      carBody.addColorStop(1, "#4aa3df");
+      ctx.fillStyle = carBody;
+      ctx.beginPath();
+      ctx.roundRect(carX, carY + 9, game.car.w, game.car.h - 8, 8);
+      ctx.fill();
+      ctx.fillStyle = "rgba(215, 239, 255, 0.72)";
+      ctx.beginPath();
+      ctx.roundRect(carX + 17, carY, 46, 24, 6);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255, 236, 154, 0.72)";
+      ctx.beginPath();
+      ctx.moveTo(carX + game.car.w - 4, carY + 18);
+      ctx.lineTo(carX + game.car.w + 46, carY + 4);
+      ctx.lineTo(carX + game.car.w + 46, carY + 20);
+      ctx.closePath();
+      ctx.moveTo(carX + game.car.w - 4, carY + 36);
+      ctx.lineTo(carX + game.car.w + 46, carY + 50);
+      ctx.lineTo(carX + game.car.w + 46, carY + 34);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#0d1111";
+      ctx.beginPath();
+      ctx.arc(carX + 18, carY + 46, 8, 0, Math.PI * 2);
+      ctx.arc(carX + 64, carY + 46, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(240, 196, 83, 0.52)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(carX + 3, carY + 12, game.car.w - 6, game.car.h - 15);
+      ctx.restore();
+    }
   }
 
   if (game.wreckCar) {
     ctx.save();
     ctx.translate(game.wreckCar.x, game.wreckCar.y);
     ctx.rotate(game.wreckCar.angle || 0);
-    ctx.fillStyle = "#263036";
-    ctx.fillRect(-34, -19, 68, 38);
-    ctx.fillStyle = "#111516";
-    ctx.fillRect(-10, -25, 28, 50);
-    ctx.strokeStyle = "#e45b4f";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(-26, -14);
-    ctx.lineTo(8, 10);
-    ctx.moveTo(-3, -17);
-    ctx.lineTo(30, 15);
-    ctx.stroke();
-    ctx.fillStyle = "rgba(0,0,0,0.48)";
-    ctx.beginPath();
-    ctx.arc(-21, -20, 8, 0, Math.PI * 2);
-    ctx.arc(-21, 20, 8, 0, Math.PI * 2);
-    ctx.arc(23, -20, 8, 0, Math.PI * 2);
-    ctx.arc(23, 20, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    ctx.shadowBlur = 22;
+    ctx.shadowColor = "#e45b4f";
+    if (drawAtlasSprite(visualAssets.worldProps, 4, 4, WORLD_PROP.wreckCar, 0, 0, 94, 116, Math.PI / 2, 1)) {
+      ctx.fillStyle = "rgba(255, 118, 80, 0.28)";
+      ctx.beginPath();
+      ctx.arc(26, 0, 34, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else {
+      const wreck = ctx.createLinearGradient(-36, -24, 36, 24);
+      wreck.addColorStop(0, "#4a1d1b");
+      wreck.addColorStop(0.55, "#161d20");
+      wreck.addColorStop(1, "#30383c");
+      ctx.fillStyle = wreck;
+      ctx.beginPath();
+      ctx.roundRect(-36, -20, 72, 40, 7);
+      ctx.fill();
+      ctx.fillStyle = "#0d1112";
+      ctx.beginPath();
+      ctx.roundRect(-12, -26, 32, 52, 4);
+      ctx.fill();
+      ctx.strokeStyle = "#e45b4f";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(-26, -14);
+      ctx.lineTo(8, 10);
+      ctx.moveTo(-3, -17);
+      ctx.lineTo(30, 15);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(0,0,0,0.48)";
+      ctx.beginPath();
+      ctx.arc(-21, -20, 8, 0, Math.PI * 2);
+      ctx.arc(-21, 20, 8, 0, Math.PI * 2);
+      ctx.arc(23, -20, 8, 0, Math.PI * 2);
+      ctx.arc(23, 20, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255, 118, 80, 0.28)";
+      ctx.beginPath();
+      ctx.arc(26, 0, 34, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   if (game.parkingLot) {
+    const lotCenter = rectCenter(game.parkingLot);
+    drawWorldPulse(lotCenter.x, lotCenter.y, Math.max(game.parkingLot.w, game.parkingLot.h) * 0.62, "#f0c453", distanceToRectCenter(game.parkingLot) < 260 ? 1 : 0.72);
     ctx.save();
     const lot = game.parkingLot;
+    const lotCenterX = lot.x + lot.w / 2;
+    const lotCenterY = lot.y + lot.h / 2;
+    ctx.shadowBlur = 22;
+    ctx.shadowColor = "#f0c453";
+    if (drawAtlasSprite(visualAssets.objectiveIcons, 3, 3, OBJECTIVE_ICON.parking, lotCenterX, lotCenterY, lot.w * 1.22, lot.h * 1.18, 0, 0.98)) {
+      ctx.strokeStyle = "rgba(240, 196, 83, 0.64)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.roundRect(lot.x - 8, lot.y - 8, lot.w + 16, lot.h + 16, 10);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
     const lampX = lot.x + lot.w + 46;
     const lampY = lot.y - 28;
     const lampGlow = ctx.createRadialGradient(lampX, lampY, 10, lampX, lampY, 190);
@@ -2132,44 +3368,141 @@ function drawItems() {
   }
 }
 
+function drawObjectiveBeacon() {
+  if (game.mode !== MODE.PLAYING) return;
+  const target = currentObjectiveTarget();
+  if (!target) return;
+  const distance = Math.hypot(target.x - game.player.x, target.y - game.player.y);
+  const pulse = 0.5 + Math.sin(performance.now() / 210) * 0.5;
+  const radius = clamp(38 + distance / 42, 42, 96) + pulse * 10;
+  ctx.save();
+  ctx.globalAlpha = 0.74;
+  ctx.strokeStyle = game.phase === "maze" ? "rgba(213, 169, 255, 0.88)" : "rgba(240, 196, 83, 0.88)";
+  ctx.lineWidth = 2.5;
+  ctx.shadowBlur = 22;
+  ctx.shadowColor = game.phase === "maze" ? "#a048ff" : "#f0c453";
+  if (distance > 160) {
+    const angle = Math.atan2(target.y - game.player.y, target.x - game.player.x);
+    const start = clamp(distance * 0.18, 74, 170);
+    const end = Math.min(distance - 58, start + clamp(distance * 0.28, 120, 280));
+    ctx.save();
+    ctx.globalAlpha = 0.18 + pulse * 0.18;
+    ctx.strokeStyle = game.phase === "maze" ? "rgba(213, 169, 255, 0.72)" : "rgba(240, 196, 83, 0.72)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([12, 18]);
+    ctx.beginPath();
+    ctx.moveTo(game.player.x + Math.cos(angle) * start, game.player.y + Math.sin(angle) * start);
+    ctx.lineTo(game.player.x + Math.cos(angle) * end, game.player.y + Math.sin(angle) * end);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (let i = 0; i < 3; i += 1) {
+      const d = start + (end - start) * (i + 0.35 + pulse * 0.3) / 3;
+      const x = game.player.x + Math.cos(angle) * d;
+      const y = game.player.y + Math.sin(angle) * d;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = game.phase === "maze" ? "rgba(213, 169, 255, 0.8)" : "rgba(240, 196, 83, 0.8)";
+      ctx.beginPath();
+      ctx.moveTo(12, 0);
+      ctx.lineTo(-8, -7);
+      ctx.lineTo(-4, 0);
+      ctx.lineTo(-8, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, radius, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = 0.3 + pulse * 0.24;
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, radius * 0.62, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = 0.86;
+  ctx.fillStyle = game.phase === "maze" ? "#d5a9ff" : "#fff3bd";
+  ctx.font = "900 13px Inter, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(target.label || "目标", target.x, target.y - radius - 12);
+  ctx.restore();
+}
+
 function drawEffects() {
   game.muzzleFlashes.forEach((flash) => {
     const alpha = clamp(flash.life / flash.maxLife, 0, 1);
+    const hot = flash.level >= 8 ? "#fff1a8" : "#fff7d1";
     ctx.save();
     ctx.translate(flash.x, flash.y);
     ctx.rotate(flash.angle);
     ctx.globalAlpha = alpha;
-    ctx.shadowBlur = 18;
+    ctx.shadowBlur = 28;
     ctx.shadowColor = flash.color || "#fff7a6";
+    ctx.strokeStyle = `rgba(255, 247, 209, ${0.26 * alpha})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, flash.size * (1.25 - alpha * 0.4), 0, Math.PI * 2);
+    ctx.stroke();
     ctx.fillStyle = flash.color || "#fff7a6";
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(flash.size, -flash.size * 0.28);
-    ctx.lineTo(flash.size * 0.62, 0);
-    ctx.lineTo(flash.size, flash.size * 0.28);
+    ctx.lineTo(flash.size * 1.35, -flash.size * 0.34);
+    ctx.lineTo(flash.size * 0.72, 0);
+    ctx.lineTo(flash.size * 1.35, flash.size * 0.34);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = "#fff7d1";
+    ctx.fillStyle = hot;
     ctx.beginPath();
-    ctx.arc(0, 0, flash.size * 0.18, 0, Math.PI * 2);
+    ctx.arc(0, 0, flash.size * 0.24, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   });
   game.bullets.forEach((b) => {
+    const angle = b.angle ?? Math.atan2(b.vy, b.vx);
+    const tailX = b.x - Math.cos(angle) * (b.trail || 56);
+    const tailY = b.y - Math.sin(angle) * (b.trail || 56);
+    const trail = ctx.createLinearGradient(tailX, tailY, b.x, b.y);
+    trail.addColorStop(0, "rgba(255, 255, 255, 0)");
+    trail.addColorStop(0.35, `${b.color || "#fff7a6"}55`);
+    trail.addColorStop(1, "#fff7d1");
     ctx.save();
-    ctx.shadowBlur = 12;
+    ctx.lineCap = "round";
+    ctx.shadowBlur = 18;
     ctx.shadowColor = b.color || "#fff7a6";
+    ctx.strokeStyle = trail;
+    ctx.lineWidth = clamp(b.r * 1.4, 4, 14);
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.strokeStyle = `${b.color || "#fff7a6"}99`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r * 2.2, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.fillStyle = b.color || "#fff7a6";
     ctx.beginPath();
     ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = "#fff7d1";
+    ctx.beginPath();
+    ctx.arc(b.x + Math.cos(angle) * b.r * 0.32, b.y + Math.sin(angle) * b.r * 0.32, Math.max(1.8, b.r * 0.42), 0, Math.PI * 2);
+    ctx.fill();
     ctx.restore();
   });
   game.particles.forEach((p) => {
-    ctx.globalAlpha = clamp(p.life * 3, 0, 1);
+    const alpha = clamp(p.life * 3, 0, 1);
+    const size = p.size || 4;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.angle || 0);
+    ctx.globalAlpha = alpha;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = p.color;
     ctx.fillStyle = p.color;
-    ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
-    ctx.globalAlpha = 1;
+    ctx.fillRect(-size * 0.5, -size * 0.18, size, size * 0.36);
+    ctx.restore();
   });
 }
 
@@ -2279,16 +3612,44 @@ function drawDamageOverlay() {
   ctx.fillRect(0, 0, W, H);
 }
 
+function drawAimReticle() {
+  if (game.mode !== MODE.PLAYING || game.driving) return;
+  const spread = currentWeapon().spread || 0;
+  const size = clamp(13 + spread * 210, 13, 30);
+  const pulse = game.shootCooldown > 0 ? 1 + game.shootCooldown * 2.4 : 1;
+  ctx.save();
+  ctx.translate(mouse.screenX, mouse.screenY);
+  ctx.globalAlpha = 0.86;
+  ctx.strokeStyle = game.phase === "maze" ? "rgba(213, 169, 255, 0.92)" : "rgba(240, 196, 83, 0.92)";
+  ctx.lineWidth = 1.6;
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = game.phase === "maze" ? "#a048ff" : "#f0c453";
+  ctx.beginPath();
+  ctx.arc(0, 0, size * pulse, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-size - 10, 0);
+  ctx.lineTo(-size - 3, 0);
+  ctx.moveTo(size + 3, 0);
+  ctx.lineTo(size + 10, 0);
+  ctx.moveTo(0, -size - 10);
+  ctx.lineTo(0, -size - 3);
+  ctx.moveTo(0, size + 3);
+  ctx.lineTo(0, size + 10);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255, 255, 255, 0.82)";
+  ctx.beginPath();
+  ctx.arc(0, 0, 2.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function updateCarPointerDom() {
   if (game.phase !== "forest") {
     ui.carPointer.classList.add("hidden");
     return;
   }
-  const target = (game.driving || game.escapeOnFoot) && game.parkingLot
-    ? { x: game.parkingLot.x + game.parkingLot.w / 2, y: game.parkingLot.y + game.parkingLot.h / 2, label: "停车场" }
-    : game.car
-      ? { x: game.car.x + game.car.w / 2, y: game.car.y + game.car.h / 2, label: "逃生车" }
-      : null;
+  const target = currentObjectiveTarget();
   if (!target) {
     ui.carPointer.classList.add("hidden");
     return;
@@ -2298,7 +3659,105 @@ function updateCarPointerDom() {
   ui.carPointer.classList.remove("hidden");
   ui.carPointerLabel.textContent = target.label;
   ui.carDistance.textContent = `${Math.max(0, Math.round(Math.hypot(dx, dy) / 10))} 米`;
-  ui.carArrow.style.transform = `rotate(${Math.atan2(dy, dx) + Math.PI}rad)`;
+  if (ui.carArrow instanceof HTMLElement) {
+    ui.carArrow.style.transform = `rotate(${Math.atan2(dy, dx) + Math.PI}rad)`;
+  }
+}
+
+function drawWorldHint(screenX, screenY, text, tone = "#f0c453") {
+  const pulse = 0.7 + Math.sin(performance.now() / 200) * 0.3;
+  ctx.save();
+  ctx.globalAlpha = 0.84 + pulse * 0.12;
+  ctx.font = "900 14px Inter, sans-serif";
+  ctx.textAlign = "center";
+  const metrics = ctx.measureText(text);
+  const width = Math.max(112, metrics.width + 34);
+  const height = 34;
+  const x = screenX - width / 2;
+  const y = screenY - height / 2;
+  ctx.shadowBlur = 18;
+  ctx.shadowColor = tone;
+  ctx.fillStyle = "rgba(4, 8, 9, 0.82)";
+  ctx.strokeStyle = tone;
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, 8);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = tone;
+  ctx.beginPath();
+  ctx.arc(x + 16, y + height / 2, 4 + pulse * 1.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#fff4d3";
+  ctx.shadowBlur = 0;
+  ctx.fillText(text, screenX + 8, y + 22);
+  ctx.restore();
+}
+
+function drawWorldHintAt(worldX, worldY, text, tone = "#f0c453", offsetY = 58) {
+  drawWorldHint(worldX - game.camera.x, worldY - game.camera.y - offsetY, text, tone);
+}
+
+function nearestPickupForHint() {
+  let best = null;
+  let bestDistance = Infinity;
+  game.pickups.forEach((item) => {
+    const maxDistance = item.type === "key" ? 150 : item.type === "chest" ? 105 : 86;
+    const itemDistance = dist(game.player, item);
+    if (itemDistance < maxDistance && itemDistance < bestDistance) {
+      best = item;
+      bestDistance = itemDistance;
+    }
+  });
+  return best;
+}
+
+function drawProximityHint() {
+  if (game.mode !== MODE.PLAYING) return;
+  if (game.phase === "forest") {
+    if (game.nearTent || game.nearWatchtower) return;
+    if (game.nightmareEntrance && distanceToRectCenter(game.nightmareEntrance) < 170) {
+      const center = rectCenter(game.nightmareEntrance);
+      drawWorldHintAt(center.x, center.y, "靠近进入地下入口", "#a048ff", 78);
+      return;
+    }
+    if (game.car && distanceToRectCenter(game.car) < 180) {
+      const center = rectCenter(game.car);
+      drawWorldHintAt(center.x, center.y, "靠近上车逃亡", "#6ce4ff", 76);
+      return;
+    }
+    if (game.parkingLot && (game.driving || game.escapeOnFoot) && distanceToRectCenter(game.parkingLot) < 240) {
+      const center = rectCenter(game.parkingLot);
+      drawWorldHintAt(center.x, center.y, "进入停车场完成逃生", "#f0c453", 86);
+      return;
+    }
+  }
+
+  if (game.phase === "maze") {
+    const item = nearestPickupForHint();
+    if (item) {
+      const text = item.type === "key"
+        ? `拾取钥匙 ${game.foundKeys + 1} / 2`
+        : item.type === "ammo"
+          ? "拾取弹药"
+          : item.type === "medkit"
+            ? "使用医疗包"
+            : "打开补给箱";
+      const tone = item.type === "key" || item.type === "chest" ? "#f0c453" : item.type === "ammo" ? "#5cc7ff" : "#7ae0a6";
+      drawWorldHintAt(item.x, item.y, text, tone, item.type === "key" ? 66 : 58);
+      return;
+    }
+    if (game.door && distanceToRectCenter(game.door) < 165) {
+      const center = rectCenter(game.door);
+      drawWorldHintAt(
+        center.x,
+        center.y,
+        game.foundKeys >= 2 ? "进入大门回到森林" : `还需要 ${2 - game.foundKeys} 把钥匙`,
+        game.foundKeys >= 2 ? "#7ae0a6" : "#f0c453",
+        82,
+      );
+    }
+  }
 }
 
 function drawTentHint() {
@@ -2306,16 +3765,31 @@ function drawTentHint() {
   const tent = game.nearTent;
   const screenX = tent.x - game.camera.x;
   const screenY = tent.y - game.camera.y;
-  const pulse = 0.7 + Math.sin(performance.now() / 200) * 0.3;
-  ctx.save();
-  ctx.globalAlpha = pulse;
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 14px sans-serif";
-  ctx.textAlign = "center";
-  ctx.shadowColor = "#000000";
-  ctx.shadowBlur = 4;
-  ctx.fillText("按 E 搜刮", screenX, screenY - 35);
-  ctx.restore();
+  if (game.searchedTents.has(tent.key)) {
+    drawWorldHint(screenX, screenY - 42, "帐篷已搜刮", "#8fa59f");
+  } else if (isOpeningForestQuestActive() && (game.questStage || 0) <= 0) {
+    drawWorldHint(screenX, screenY - 42, "按 E 搜寻线索", "#f0c453");
+  } else {
+    drawWorldHint(screenX, screenY - 42, "按 E 搜刮", "#f0c453");
+  }
+}
+
+function drawWatchtowerHint() {
+  if (!game.nearWatchtower || game.phase !== "forest" || game.driving) return;
+  const tower = game.nearWatchtower;
+  const screenX = tower.x - game.camera.x;
+  const screenY = tower.y - game.camera.y;
+  if (game.inWatchtower) {
+    if (game.searchedWatchtowers.has(tower.key)) {
+      drawWorldHint(screenX, screenY - 70, "瞭望塔已搜刮", "#8fa59f");
+    } else if (isOpeningForestQuestActive() && game.questStage === 1) {
+      drawWorldHint(screenX, screenY - 70, "按 E 定位入口", "#f0c453");
+    } else {
+      drawWorldHint(screenX, screenY - 70, "按 E 搜刮", "#f0c453");
+    }
+  } else {
+    drawWorldHint(screenX, screenY - 70, "进入瞭望塔", "#6ce4ff");
+  }
 }
 
 function draw() {
@@ -2331,16 +3805,20 @@ function draw() {
   if (game.phase === "maze") drawMaze();
   else drawForest();
   drawItems();
+  drawObjectiveBeacon();
   drawEffects();
-  drawMonsters();
+  if (game.mode === MODE.PLAYING) drawMonsters();
   drawPlayer();
   if (game.phase === "forest") drawForestFeatures("cover");
   ctx.restore();
   drawWeatherEffects();
   drawVisionMask();
   drawDamageOverlay();
+  drawAimReticle();
   updateCarPointerDom();
   drawTentHint();
+  drawWatchtowerHint();
+  drawProximityHint();
 }
 
 function loop(time) {
@@ -2368,7 +3846,15 @@ window.addEventListener("keydown", (event) => {
   keysDown.add(key);
   // E 键搜刮帐篷
   if (key === "e" && game.nearTent && game.phase === "forest" && !game.driving) {
-    searchTent(game.nearTent);
+    if (!game.searchedTents.has(game.nearTent.key)) {
+      searchTent(game.nearTent);
+    }
+  }
+  // E 键进入/搜刮瞭望塔
+  if (key === "e" && game.nearWatchtower && game.phase === "forest" && !game.driving) {
+    if (game.inWatchtower && !game.searchedWatchtowers.has(game.nearWatchtower.key)) {
+      searchWatchtower(game.nearWatchtower);
+    }
   }
 });
 
@@ -2390,6 +3876,18 @@ canvas.addEventListener("mousemove", (event) => {
   updateMouseWorld();
 });
 
+canvas.addEventListener("pointermove", (event) => {
+  if (event.pointerType === "mouse") return;
+  Object.assign(mouse, canvasPoint(event));
+  updateMouseWorld();
+});
+
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse") return;
+  Object.assign(mouse, canvasPoint(event));
+  updateMouseWorld();
+});
+
 canvas.addEventListener("mousedown", (event) => {
   if (event.target !== canvas) return;
   Object.assign(mouse, canvasPoint(event));
@@ -2403,7 +3901,8 @@ window.addEventListener("mouseup", () => {
 });
 
 function updateJoystickKnob() {
-  ui.joystickKnob.style.transform = `translate(calc(-50% + ${joystick.dx * 34}px), calc(-50% + ${joystick.dy * 34}px))`;
+  const travel = Math.max(28, (ui.joystick.clientWidth - ui.joystickKnob.clientWidth) / 2 - 4);
+  ui.joystickKnob.style.transform = `translate(calc(-50% + ${joystick.dx * travel}px), calc(-50% + ${joystick.dy * travel}px))`;
 }
 
 ui.joystick.addEventListener("pointerdown", (event) => {
@@ -2411,6 +3910,7 @@ ui.joystick.addEventListener("pointerdown", (event) => {
   joystick.id = event.pointerId;
   joystick.startX = event.clientX;
   joystick.startY = event.clientY;
+  ui.joystick.classList.add("is-active");
   ui.joystick.setPointerCapture(event.pointerId);
 });
 
@@ -2435,26 +3935,42 @@ function resetJoystick(event) {
   joystick.id = null;
   joystick.dx = 0;
   joystick.dy = 0;
+  ui.joystick.classList.remove("is-active");
   updateJoystickKnob();
 }
 
 ui.joystick.addEventListener("pointerup", resetJoystick);
 ui.joystick.addEventListener("pointercancel", resetJoystick);
 
+if (ui.fireButton) {
+  ui.fireButton.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    shootHeld = true;
+    ui.fireButton.classList.add("is-pressed");
+    ui.fireButton.setPointerCapture(event.pointerId);
+    shoot();
+  });
+  const stopFire = (event) => {
+    if (event) event.preventDefault();
+    shootHeld = false;
+    ui.fireButton.classList.remove("is-pressed");
+  };
+  ui.fireButton.addEventListener("pointerup", stopFire);
+  ui.fireButton.addEventListener("pointercancel", stopFire);
+}
+
 ui.banner.addEventListener("click", (event) => {
-  console.log("Banner clicked, target:", event.target.id, "tagName:", event.target.tagName);
-  if (event.target.id === "startBtn") {
-    console.log("startBtn clicked, showing intro");
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.id === "startBtn") {
     showIntro();
   }
-  if (event.target.id === "introStartBtn") {
-    console.log("introStartBtn clicked, calling start()");
+  if (target?.id === "introStartBtn") {
     stopIntroAtmosphere();
     start();
   }
-  if (event.target.id === "nextDayBtn") startNextDay();
-  if (event.target.id === "retryDayBtn") restartFailedDay();
-  if (event.target.id === "mainMenuBtn") showMainMenu();
+  if (target?.id === "nextDayBtn") startNextDay();
+  if (target?.id === "retryDayBtn") restartFailedDay();
+  if (target?.id === "mainMenuBtn") showMainMenu();
 });
 ui.shopBtn.addEventListener("click", () => {
   if (game.driving || game.escapeOnFoot) return;
@@ -2470,17 +3986,19 @@ ui.ammoTab.addEventListener("click", () => {
   setShopTab("ammo");
 });
 ui.weaponList.addEventListener("click", (event) => {
-  const weaponButton = event.target.closest(".weapon-buy");
+  const target = event.target instanceof Element ? event.target : null;
+  const weaponButton = /** @type {HTMLElement | null | undefined} */ (target?.closest(".weapon-buy"));
   if (weaponButton) {
     buyOrEquipWeapon(weaponButton.dataset.weapon);
     return;
   }
-  const ammoButton = event.target.closest(".ammo-buy");
+  const ammoButton = /** @type {HTMLElement | null | undefined} */ (target?.closest(".ammo-buy"));
   if (ammoButton) buyAmmo(ammoButton.dataset.ammoLevel);
 });
 ui.weaponQuickbar.addEventListener("click", (event) => {
   if (game.driving) return;
-  const button = event.target.closest(".quick-weapon");
+  const target = event.target instanceof Element ? event.target : null;
+  const button = /** @type {HTMLElement | null | undefined} */ (target?.closest(".quick-weapon"));
   if (!button) return;
   buyOrEquipWeapon(button.dataset.weapon);
 });

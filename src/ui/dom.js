@@ -20,12 +20,18 @@ export function getUi() {
     weaponQuickbar: document.getElementById("weaponQuickbar"),
     joystick: document.getElementById("joystick"),
     joystickKnob: document.getElementById("joystickKnob"),
+    fireButton: document.getElementById("fireButton"),
     taskPanel: document.getElementById("taskPanel"),
     taskToggle: document.getElementById("taskToggle"),
     carPointer: document.getElementById("carPointer"),
     carPointerLabel: document.getElementById("carPointerLabel"),
     carDistance: document.getElementById("carDistance"),
     carArrow: document.querySelector(".car-arrow"),
+    objectiveToast: document.getElementById("objectiveToast"),
+    objectiveTitle: document.getElementById("objectiveTitle"),
+    objectiveDetail: document.getElementById("objectiveDetail"),
+    threatMeter: document.getElementById("threatMeter"),
+    threatLevel: document.getElementById("threatLevel"),
     tasks: Array.from(document.querySelectorAll("#tasks li")),
   };
 }

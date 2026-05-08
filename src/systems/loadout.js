@@ -7,7 +7,7 @@ export function getCurrentWeapon(game) {
 }
 
 export function ammoPrice(level) {
-  return Math.round(14 + level * 9 + level * level * 1.35);
+  return Math.round(10 + level * 7 + level * level * 1.1);
 }
 
 export function ammoPackSize(level) {

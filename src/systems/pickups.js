@@ -36,7 +36,7 @@ export function collectPickupItems({ game, onAmmo, onChest, onKey, onMedkit }) {
 }
 
 export function openChest(game, chest) {
-  const weapon = weapons[Math.floor(rand(0, weapons.length))] || weapons[0];
+  const weapon = chooseChestWeapon(game);
   const previousWeaponId = game.weaponId;
   if (!game.ownedWeapons.includes(weapon.id)) game.ownedWeapons.push(weapon.id);
   game.weaponId = weapon.id;
@@ -70,8 +70,30 @@ export function useMedkit(game, level) {
   game.hidden = false;
 }
 
-export function randomAmmoLevel() {
-  return Math.floor(rand(1, 25));
+function chooseChestWeapon(game) {
+  const current = getCurrentWeapon(game);
+  const maxLevel = clamp(3 + game.day * 2 + Math.floor(game.danger / 2), 2, 24);
+  const newWeapons = weapons.filter((weapon) => !game.ownedWeapons.includes(weapon.id) && weapon.level <= maxLevel);
+  if (newWeapons.length > 0 && Math.random() < 0.72) {
+    const nearCurrent = newWeapons.filter((weapon) => weapon.level <= current.level + 4);
+    const pool = nearCurrent.length > 0 ? nearCurrent : newWeapons;
+    return pool[Math.floor(rand(0, pool.length))] || current;
+  }
+  const owned = weapons.filter((weapon) => game.ownedWeapons.includes(weapon.id));
+  return owned[Math.floor(rand(0, owned.length))] || current;
+}
+
+export function randomAmmoLevel(game) {
+  if (!game) return Math.floor(rand(1, 25));
+  const current = getCurrentWeapon(game);
+  const owned = weapons.filter((weapon) => game.ownedWeapons.includes(weapon.id));
+  if (Math.random() < 0.78) return current.level;
+  if (owned.length > 0 && Math.random() < 0.72) {
+    const weapon = owned[Math.floor(rand(0, owned.length))] || current;
+    return weapon.level;
+  }
+  const maxLevel = clamp(current.level + 3 + Math.floor(game.day / 2), 1, 24);
+  return Math.floor(rand(1, maxLevel + 1));
 }
 
 export function spawnAmmoPickup({ game, hitsForestRock, hitsWall }) {
@@ -92,7 +114,7 @@ export function spawnAmmoPickup({ game, hitsForestRock, hitsWall }) {
     const spot = spots[Math.floor(rand(0, spots.length))];
     const item = {
       type: "ammo",
-      level: randomAmmoLevel(),
+      level: randomAmmoLevel(game),
       amount: Math.round(rand(6, 13)),
       x: spot.x + rand(-18, 18),
       y: spot.y + rand(-18, 18),
@@ -108,7 +130,7 @@ export function spawnAmmoPickup({ game, hitsForestRock, hitsWall }) {
     const distance = rand(260, 720);
     const item = {
       type: "ammo",
-      level: randomAmmoLevel(),
+      level: randomAmmoLevel(game),
       amount: Math.round(rand(6, 13)),
       x: game.player.x + Math.cos(angle) * distance,
       y: game.player.y + Math.sin(angle) * distance,

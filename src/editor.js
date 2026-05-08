@@ -1,7 +1,7 @@
-const canvas = document.getElementById("editor");
-const ctx = canvas.getContext("2d");
-const tool = document.getElementById("tool");
-const levelName = document.getElementById("levelName");
+const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById("editor"));
+const ctx = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+const tool = /** @type {HTMLSelectElement} */ (document.getElementById("tool"));
+const levelName = /** @type {HTMLInputElement} */ (document.getElementById("levelName"));
 const objects = [];
 
 function resize() {
@@ -63,12 +63,12 @@ canvas.addEventListener("click", (event) => {
   draw();
 });
 
-document.getElementById("clearBtn").addEventListener("click", () => {
+document.getElementById("clearBtn")?.addEventListener("click", () => {
   objects.length = 0;
   draw();
 });
 
-document.getElementById("exportBtn").addEventListener("click", async () => {
+document.getElementById("exportBtn")?.addEventListener("click", async () => {
   const level = { version: 1, name: levelName.value || "自定义关卡", objects };
   const text = JSON.stringify(level, null, 2);
   await navigator.clipboard?.writeText(text);

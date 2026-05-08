@@ -33,6 +33,21 @@ const HORROR_PALETTE = {
   bone: "#c4c4c4",
 };
 
+const MONSTER_ATLAS = new Image();
+MONSTER_ATLAS.decoding = "async";
+MONSTER_ATLAS.dataset.src = "assets/images/monster-atlas.webp";
+
+const MONSTER_SPRITE = {
+  mourner: [0, 0],
+  stalker: [1, 0],
+  chaser: [2, 0],
+  mazeCrawler: [3, 0],
+  mazeBrute: [0, 1],
+  hornedBeast: [1, 1],
+  boss: [2, 1],
+  bossSigil: [3, 1],
+};
+
 // Stage configurations
 const HORROR_STAGES = {
   // Stage 1: "The Mourner" - tall, faceless, emaciated
@@ -113,6 +128,12 @@ export function drawHorrorMonster(ctx, m, time) {
   if (config.trailColor && Math.hypot(m.vx || 0, m.vy || 0) > 0.3) {
     drawHorrorTrail(ctx, m, r, config, time);
   }
+
+  if (drawMonsterSprite(ctx, m, r, hurt, stage, config, time)) {
+    ctx.restore();
+    if (m.maxHp > 1) drawHorrorHealthBar(ctx, m, hurt);
+    return;
+  }
   
   // Draw body based on stage
   switch (stage) {
@@ -128,12 +149,141 @@ export function drawHorrorMonster(ctx, m, time) {
       break;
   }
   
-  // Draw health bar for non-small monsters
-  // if (m.maxHp > 1) {
-  //   drawHorrorHealthBar(ctx, m, hurt);
-  // }
-  
   ctx.restore();
+  if (m.maxHp > 1) drawHorrorHealthBar(ctx, m, hurt);
+}
+
+function imageReady(image) {
+  return image.complete && image.naturalWidth > 0;
+}
+
+function ensureMonsterAtlas() {
+  if (!MONSTER_ATLAS.src && MONSTER_ATLAS.dataset.src) MONSTER_ATLAS.src = MONSTER_ATLAS.dataset.src;
+}
+
+function monsterSpriteCell(m, stage) {
+  if (m.kind === "boss") return MONSTER_SPRITE.boss;
+  if (m.kind === "chaser") return MONSTER_SPRITE.chaser;
+  if (m.kind === "mazeBig") return MONSTER_SPRITE.mazeBrute;
+  if (m.kind === "small") return MONSTER_SPRITE.mazeCrawler;
+  if (stage === "beast") return MONSTER_SPRITE.hornedBeast;
+  if (stage === "scream") return MONSTER_SPRITE.stalker;
+  return MONSTER_SPRITE.mourner;
+}
+
+function drawAtlasCell(ctx, image, columns, rows, cell, x, y, width, height, rotation = 0, alpha = 1, flipX = false) {
+  if (!imageReady(image)) return false;
+  const [col, row] = cell;
+  const cellW = image.naturalWidth / columns;
+  const cellH = image.naturalHeight / rows;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+  ctx.scale(flipX ? -1 : 1, 1);
+  ctx.globalAlpha *= alpha;
+  ctx.drawImage(image, col * cellW, row * cellH, cellW, cellH, -width / 2, -height / 2, width, height);
+  ctx.restore();
+  return true;
+}
+
+function monsterSpriteSize(m, r, stage) {
+  if (m.kind === "boss") return { width: r * 4.7, height: r * 3.45, y: -r * 0.08 };
+  if (m.kind === "mazeBig") return { width: r * 4.15, height: r * 3.85, y: -r * 0.18 };
+  if (m.kind === "small") return { width: r * 4.6, height: r * 3.15, y: -r * 0.08 };
+  if (m.kind === "chaser") return { width: r * 4.55, height: r * 3.45, y: -r * 0.08 };
+  if (stage === "beast") return { width: r * 4.55, height: r * 3.35, y: -r * 0.08 };
+  if (stage === "scream") return { width: r * 4.35, height: r * 3.55, y: -r * 0.16 };
+  return { width: r * 4.75, height: r * 3.2, y: -r * 0.08 };
+}
+
+function drawMonsterSprite(ctx, m, r, hurt, stage, config, time) {
+  ensureMonsterAtlas();
+  if (!imageReady(MONSTER_ATLAS)) return false;
+  const cell = monsterSpriteCell(m, stage);
+  const size = monsterSpriteSize(m, r, stage);
+  const velocityX = m.vx || 0;
+  const flipX = velocityX < -0.02;
+  const speed = Math.hypot(m.vx || 0, m.vy || 0);
+  const lunge = Math.min(r * 0.18, speed * 0.16);
+  const lungeX = Math.sign(velocityX || 1) * lunge;
+  const bob = Math.sin(time / (m.kind === "chaser" ? 70 : 130) + m.x * 0.025) * r * 0.04;
+  const damaged = hurt < 0.35;
+
+  drawSpriteAura(ctx, m, r, hurt, stage, config, time);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = m.kind === "boss" ? 0.34 : m.kind === "chaser" ? 0.2 : 0.12;
+  ctx.fillStyle = m.kind === "small" || m.kind === "mazeBig" ? "#a048ff" : "#e45b4f";
+  ctx.beginPath();
+  ctx.ellipse(0, r * 0.65, size.width * 0.34, r * 0.32, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.shadowBlur = m.kind === "boss" ? 30 : stage === "mourner" ? 14 : 20;
+  ctx.shadowColor = m.kind === "small" || m.kind === "mazeBig" ? "#a048ff" : "#e45b4f";
+  drawAtlasCell(ctx, MONSTER_ATLAS, 4, 2, cell, lungeX, size.y + bob, size.width, size.height, 0, damaged ? 0.82 : 1, flipX);
+
+  if (damaged) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.24 + Math.sin(time / 55) * 0.08;
+    ctx.fillStyle = "#ff4b57";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, size.width * 0.34, size.height * 0.31, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  return true;
+}
+
+function drawSpriteAura(ctx, m, r, hurt, stage, config, time) {
+  const boss = m.kind === "boss";
+  const maze = m.kind === "small" || m.kind === "mazeBig";
+  const pulse = 0.55 + Math.sin(time / (boss ? 140 : 210) + m.x * 0.015) * 0.25;
+  const color = boss ? "#ff2638" : maze ? "#a048ff" : stage === "mourner" ? "#5cc7ff" : "#e45b4f";
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = boss ? 0.48 : 0.22 + pulse * 0.14;
+  const glow = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r * (boss ? 3.1 : 2.25));
+  glow.addColorStop(0, color);
+  glow.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * (boss ? 3.1 : 2.25), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  if (boss) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.rotate(time / 1100);
+    drawAtlasCell(ctx, MONSTER_ATLAS, 4, 2, MONSTER_SPRITE.bossSigil, 0, r * 0.78, r * 4.5, r * 4.5, 0, 0.38 + pulse * 0.16, false);
+    ctx.restore();
+  }
+
+  if (m.kind === "chaser") {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `rgba(255, 75, 87, ${0.28 + pulse * 0.18})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * (1.55 + pulse * 0.18), -Math.PI * 0.2, Math.PI * 1.22);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (hurt < 0.45) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `rgba(255, 247, 209, ${0.16 + (1 - hurt) * 0.2})`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * (1.15 + pulse * 0.15), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function drawHorrorShadow(ctx, r, config) {

@@ -4,7 +4,7 @@ let enabled = true;
 function context() {
   if (!enabled) return null;
   if (!audioContext) {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const AudioCtx = window.AudioContext || /** @type {typeof AudioContext | undefined} */ (window["webkitAudioContext"]);
     if (!AudioCtx) return null;
     audioContext = new AudioCtx();
   }

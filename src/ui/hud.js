@@ -4,7 +4,23 @@ export function updateAmmoHud(ui, currentAmmo, maxAmmo) {
 
 export function updateHud(ui, game, weapon, currentAmmo, maxAmmo) {
   const forestName = game.scene?.name ? `森林·${game.scene.name}` : "神秘森林";
-  ui.place.textContent = game.phase === "maze" ? "迷宫" : game.driving ? `驾驶逃生车·${game.scene?.name || "森林"}` : game.escapeOnFoot ? `徒步逃生·${game.scene?.name || "森林"}` : game.healingTimer > 0 ? `治疗中 ${Math.ceil(game.healingTimer)}秒` : game.hidden ? `${forestName}（草丛隐藏）` : forestName;
+  ui.place.textContent = game.phase === "maze"
+    ? "噩梦迷宫"
+    : game.driving
+      ? `驾驶逃生车·${game.scene?.name || "森林"}`
+      : game.escapeOnFoot
+        ? `徒步逃生·${game.scene?.name || "森林"}`
+        : game.nightmareEntrance
+          ? `寻找入口·${game.scene?.name || "森林"}`
+          : game.questStage === 1
+            ? `定位入口·${game.scene?.name || "森林"}`
+            : game.questStage === 0
+              ? `搜寻线索·${game.scene?.name || "森林"}`
+              : game.healingTimer > 0
+                ? `治疗中 ${Math.ceil(game.healingTimer)}秒`
+                : game.hidden
+                  ? `${forestName}（草丛隐藏）`
+                  : forestName;
   ui.health.textContent = game.driving ? `车 ${Math.max(0, Math.ceil(game.vehicleHp))}` : String(Math.max(0, Math.ceil(game.player.hp)));
   ui.keys.textContent = `${game.foundKeys} / 2`;
   ui.danger.textContent = String(Math.max(1, Math.floor(game.danger)));

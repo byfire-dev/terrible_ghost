@@ -13,6 +13,7 @@ export function createInitialGameState() {
     walls: [],
     door: null,
     car: null,
+    nightmareEntrance: null,
     wreckCar: null,
     parkingLot: null,
     camera: { x: 0, y: 0 },
@@ -50,5 +51,13 @@ export function createInitialGameState() {
     won: false,
     searchedTents: new Set(),
     tentSearchCooldown: 0,
+    searchedWatchtowers: new Set(),
+    inWatchtower: false,
+    nearWatchtower: null,
+    watchtowerSearchCooldown: 0,
+    questStage: 0,
+    storyTent: null,
+    storyWatchtower: null,
+    storyEntrance: null,
   };
 }
