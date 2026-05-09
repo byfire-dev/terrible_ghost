@@ -85,7 +85,7 @@ function assertSmoke(result) {
   if (!result.state.objectiveVisible) throw new Error(`${result.label} objective toast did not appear`);
   if (result.homeAssets.some((asset) => asset.endsWith(".png"))) throw new Error(`${result.label} loaded PNG on first screen`);
   if (!result.state.serviceWorkerReady) throw new Error(`${result.label} service worker did not become ready`);
-  if (!result.state.cacheKeys.some((key) => key.startsWith("terrible-ghost-2026-05-09-1"))) {
+  if (!result.state.cacheKeys.some((key) => key.startsWith("terrible-ghost-2026-05-09-5"))) {
     throw new Error(`${result.label} expected release cache was not created`);
   }
   if (result.label === "mobile" && (!result.state.fireVisible || !result.state.joystickVisible)) {

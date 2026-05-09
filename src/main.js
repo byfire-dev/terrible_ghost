@@ -208,6 +208,59 @@ function currentAmmo() {
   return getCurrentAmmo(game);
 }
 
+function nearbySupplyChest() {
+  return game.pickups.find((item) => item.type === "chest" && dist(game.player, item) < item.r + game.player.r + 120) || null;
+}
+
+function isSafeShopArea() {
+  if (game.mode === MODE.MENU || !running) return true;
+  if (game.nearTent || game.inWatchtower || game.nearWatchtower) return true;
+  if (nearbySupplyChest()) return true;
+  return false;
+}
+
+function shopPriceMultiplier() {
+  return isSafeShopArea() ? 1 : 1.55;
+}
+
+function shopWeaponPrice(weapon) {
+  return Math.ceil((weapon.price || 0) * shopPriceMultiplier());
+}
+
+function shopAmmoPrice(level) {
+  return Math.ceil(ammoPrice(level) * shopPriceMultiplier());
+}
+
+function currentShopContext() {
+  const safe = isSafeShopArea();
+  const weapon = currentWeapon();
+  const ammo = currentAmmo();
+  let advice = "当前补给稳定，优先保留积分购买下一把武器。";
+  if (ammo <= Math.max(8, ammoPackSize(weapon.level))) {
+    advice = `${weapon.name} 弹药偏低，建议先补给再推进。`;
+  } else {
+    const nextWeapon = weapons.find((item) => !game.ownedWeapons.includes(item.id) && item.level > weapon.level);
+    if (nextWeapon) advice = `下一目标：攒到 ${shopWeaponPrice(nextWeapon)} 积分解锁 ${nextWeapon.name}。`;
+  }
+  return {
+    safe,
+    multiplier: shopPriceMultiplier(),
+    title: safe ? "安全补给点" : "紧急黑市",
+    detail: safe ? "价格稳定，可安全补给。" : "远离补给点，交易加价 55%。靠近帐篷、瞭望塔或补给箱可恢复原价。",
+    advice,
+  };
+}
+
+function canOpenShop() {
+  if (game.driving || game.escapeOnFoot) return false;
+  return true;
+}
+
+function denyShopOpen() {
+  game.shopDeniedTimer = 2.1;
+  playSound("hit");
+}
+
 function lowLevelWeaponIds() {
   return weapons.filter((weapon) => weapon.level <= 3).map((weapon) => weapon.id);
 }
@@ -358,7 +411,9 @@ function updateObjectiveHud() {
   ui.threatMeter.classList.toggle("hidden", !visible);
   if (!visible) return;
 
-  const [title, detail] = currentObjectiveCopy();
+  const [title, detail] = game.shopDeniedTimer > 0
+    ? ["当前无法交易", "驾驶或最终逃亡阶段无法打开商城。"]
+    : currentObjectiveCopy();
   ui.objectiveTitle.textContent = title;
   ui.objectiveDetail.textContent = detail;
 
@@ -759,11 +814,13 @@ function renderShop() {
   renderShopView({
     ammoArt,
     ammoPackSize,
-    ammoPrice,
+    ammoPrice: shopAmmoPrice,
     game,
     maxAmmo: MAX_AMMO,
+    shopContext: currentShopContext(),
     ui,
     weaponArt,
+    weaponPrice: shopWeaponPrice,
     weapons,
     weaponStats,
   });
@@ -774,10 +831,17 @@ function renderQuickbar() {
 }
 
 function setShopOpen(open) {
-  if (open && (game.driving || game.escapeOnFoot)) return;
+  if (open && !canOpenShop()) {
+    denyShopOpen();
+    updateHud();
+    return;
+  }
   game.shopOpen = open;
   game.mode = open ? MODE.SHOP : running ? MODE.PLAYING : MODE.MENU;
-  if (open) shootHeld = false;
+  if (open) {
+    shootHeld = false;
+    game.shopDeniedTimer = 0;
+  }
   ui.shopPanel.classList.toggle("hidden", !open);
   if (open) renderShop();
 }
@@ -791,32 +855,41 @@ function buyOrEquipWeapon(id) {
   const weapon = weapons.find((item) => item.id === id);
   if (!weapon) return;
   const previousWeapon = game.weaponId;
+  const alreadyOwned = game.ownedWeapons.includes(id);
   if (!game.ownedWeapons.includes(id)) {
-    if (game.points < weapon.price) return;
-    game.points -= weapon.price;
+    const price = shopWeaponPrice(weapon);
+    if (game.points < price) return;
+    game.points -= price;
     game.ownedWeapons.push(id);
+    addAmmo(weapon.level, ammoPackSize(weapon.level) * 2);
   }
   game.weaponId = id;
   if (previousWeapon !== id) game.weaponSwitchTimer = 0.48;
   writeSave(game);
-  playSound(previousWeapon !== id ? "buy" : "pickup");
+  playSound(!alreadyOwned || previousWeapon !== id ? "buy" : "pickup");
   if (game.shopOpen) renderShop();
   renderQuickbar();
-  updateAmmoHud();
+  updateHud();
 }
 
 function buyAmmo(level) {
   const ammoLevel = clamp(Number(level), 1, 24);
+  const ownsAmmoWeapon = game.ownedWeapons.some((id) => {
+    const weapon = weapons.find((item) => item.id === id);
+    return weapon?.level === ammoLevel;
+  });
+  if (!ownsAmmoWeapon) return;
   const stock = game.ammo[String(ammoLevel)] || 0;
   if (stock >= MAX_AMMO) return;
-  const price = ammoPrice(ammoLevel);
+  const price = shopAmmoPrice(ammoLevel);
   if (game.points < price) return;
   game.points -= price;
   addAmmo(ammoLevel, ammoPackSize(ammoLevel));
   writeSave(game);
   playSound("buy");
   renderShop();
-  updateAmmoHud();
+  renderQuickbar();
+  updateHud();
 }
 
 function resetGame(options = {}) {
@@ -870,6 +943,7 @@ function resetGame(options = {}) {
   game.healingLevel = 0;
   game.shopTab = "weapons";
   game.shopOpen = false;
+  game.shopDeniedTimer = 0;
   game.mode = running ? MODE.PLAYING : MODE.MENU;
   ui.shopPanel.classList.add("hidden");
   game.foundKeys = 0;
@@ -1811,20 +1885,33 @@ function shoot() {
   });
   muzzleBurst(muzzleX, muzzleY, angle, weapon);
   game.screenShake = Math.max(game.screenShake, clamp(2.2 + weapon.level * 0.32, 2.6, 8.5));
-  game.bullets.push({
-    x: p.x + Math.cos(angle) * 22,
-    y: p.y + Math.sin(angle) * 22,
-    vx: Math.cos(angle) * weapon.bulletSpeed,
-    vy: Math.sin(angle) * weapon.bulletSpeed,
-    r: 3.5 + weapon.level * 0.8,
-    damage: weapon.damage,
-    weaponLevel: weapon.level,
-    color: weapon.color,
-    life: weapon.bulletLife,
-    maxLife: weapon.bulletLife,
-    angle,
-    trail: clamp(34 + weapon.level * 6, 42, 128),
-  });
+  const pelletCount = weapon.type === "shotgun" ? 5 : 1;
+  const spread = weapon.type === "shotgun" ? 0.34 : 0;
+  for (let i = 0; i < pelletCount; i += 1) {
+    const t = pelletCount === 1 ? 0 : (i / (pelletCount - 1) - 0.5) * spread;
+    const shotAngle = angle + t + (weapon.type === "shotgun" ? rand(-0.035, 0.035) : 0);
+    const damage = weapon.type === "shotgun" ? Math.max(1, Math.round(weapon.damage * 0.52)) : weapon.damage;
+    game.bullets.push({
+      x: p.x + Math.cos(shotAngle) * 22,
+      y: p.y + Math.sin(shotAngle) * 22,
+      vx: Math.cos(shotAngle) * weapon.bulletSpeed,
+      vy: Math.sin(shotAngle) * weapon.bulletSpeed,
+      r: 3.5 + weapon.level * 0.8,
+      damage,
+      weaponLevel: weapon.level,
+      weaponType: weapon.type,
+      color: weapon.color,
+      life: weapon.type === "shotgun" ? weapon.bulletLife * 0.62 : weapon.bulletLife,
+      maxLife: weapon.bulletLife,
+      angle: shotAngle,
+      trail: clamp(34 + weapon.level * 6, 42, 128),
+      pierce: weapon.type === "laser" || weapon.type === "crossbow" ? 3 : 0,
+      blastRadius: weapon.type === "cannon" ? clamp(44 + weapon.level * 2, 52, 92) : 0,
+      chainRange: weapon.type === "storm" ? clamp(82 + weapon.level * 3, 96, 160) : 0,
+      slowPower: weapon.type === "ice" ? 0.52 : 1,
+      burnDamage: weapon.type === "flame" ? Math.max(1, Math.round(weapon.damage * 0.38)) : 0,
+    });
+  }
   game.shootCooldown = weapon.fireDelay;
 }
 
@@ -1944,6 +2031,10 @@ function updateMonsters(dt) {
     const prevY = m.y;
     let angle = Math.atan2(p.y - m.y, p.x - m.x);
     let speed = m.speed;
+    if (m.slowTimer > 0) {
+      speed *= m.slowPower || 0.55;
+      m.slowTimer = Math.max(0, m.slowTimer - dt);
+    }
     if (game.phase === "forest" && game.hidden && game.healingTimer <= 0) {
       m.wanderTimer -= dt;
       if (m.wanderTimer <= 0) {
@@ -1990,28 +2081,69 @@ function updateMonsters(dt) {
   });
 }
 
+function rewardMonsterDeath(monster, bullet) {
+  if (monster.hp > 0 || monster.dead) return;
+  monster.dead = true;
+  const reward = monster.kind === "boss"
+    ? Math.max(120, (monster.level || 1) * CONFIG.boss.rewardMultiplier)
+    : Math.max(8, Math.round((monster.level || 1) * 6 + (monster.kind === "chaser" ? 4 : 0)));
+  game.points += reward;
+  writeSave(game);
+  if (monster.kind === "boss") playSound("win");
+  burst(monster.x, monster.y, "#5cc7ff", Math.min(34, 8 + reward));
+  burst(monster.x, monster.y, bullet.color || "#f0c453", Math.min(32, 10 + (bullet.weaponLevel || 1) * 2));
+  if (game.shopOpen) renderShop();
+  renderQuickbar();
+}
+
+function applyWeaponHitEffects(bullet, target) {
+  if (bullet.slowPower < 1) {
+    target.slowTimer = Math.max(target.slowTimer || 0, 1.15);
+    target.slowPower = Math.min(target.slowPower || 1, bullet.slowPower);
+    burst(target.x, target.y, "#7ee9ff", 8);
+  }
+  if (bullet.burnDamage > 0) {
+    target.hp -= bullet.burnDamage;
+    burst(target.x, target.y, "#ff8a3d", 10);
+  }
+  if (bullet.blastRadius > 0) {
+    game.monsters.forEach((monster) => {
+      if (monster === target || monster.dead) return;
+      if (dist(monster, target) > bullet.blastRadius + monster.r) return;
+      monster.hp -= Math.max(1, Math.round(bullet.damage * 0.45));
+      burst(monster.x, monster.y, bullet.color || "#f0c453", 10);
+      rewardMonsterDeath(monster, bullet);
+    });
+  }
+  if (bullet.chainRange > 0) {
+    const chained = game.monsters
+      .filter((monster) => monster !== target && !monster.dead && dist(monster, target) <= bullet.chainRange)
+      .sort((a, b) => dist(a, target) - dist(b, target))[0];
+    if (chained) {
+      chained.hp -= Math.max(1, Math.round(bullet.damage * 0.55));
+      burst(chained.x, chained.y, "#76f7ff", 14);
+      rewardMonsterDeath(chained, bullet);
+    }
+  }
+}
+
 function updateHits() {
   game.bullets.forEach((b) => {
     game.monsters.forEach((m) => {
-      if (!m.dead && dist(b, m) < b.r + m.r) {
-        b.life = 0;
+      if (b.life <= 0 || m.dead) return;
+      if (dist(b, m) < b.r + m.r) {
+        if (b.pierce > 0) {
+          b.pierce -= 1;
+          if (b.pierce <= 0) b.life = 0;
+        } else {
+          b.life = 0;
+        }
         m.hp -= b.damage;
         burst(m.x, m.y, b.color || "#e45b4f", Math.min(24, 8 + Math.ceil(b.damage / 4)));
         burst(m.x, m.y, "#fff7d1", Math.min(12, 3 + Math.ceil((b.weaponLevel || 1) / 2)));
         game.screenShake = Math.max(game.screenShake, clamp(3 + (b.weaponLevel || 1) * 0.36, 3, 9));
-        if (m.hp <= 0) {
-          m.dead = true;
-          const reward = m.kind === "boss"
-            ? Math.max(120, (m.level || 1) * CONFIG.boss.rewardMultiplier)
-            : Math.max(8, Math.round((m.level || 1) * 6 + (m.kind === "chaser" ? 4 : 0)));
-          game.points += reward;
-          writeSave(game);
-          if (m.kind === "boss") playSound("win");
-          burst(m.x, m.y, "#5cc7ff", Math.min(34, 8 + reward));
-          burst(m.x, m.y, b.color || "#f0c453", Math.min(32, 10 + (b.weaponLevel || 1) * 2));
-          if (game.shopOpen) renderShop();
-          renderQuickbar();
-        }
+        applyWeaponHitEffects(b, m);
+        rewardMonsterDeath(m, b);
       }
     });
   });
@@ -2156,6 +2288,7 @@ function updateHud() {
 }
 
 function update(dt) {
+  game.shopDeniedTimer = Math.max(0, game.shopDeniedTimer - dt);
   if (game.mode !== MODE.PLAYING) {
     updateMouseWorld();
     updateHud();
@@ -3945,13 +4078,17 @@ ui.joystick.addEventListener("pointercancel", resetJoystick);
 if (ui.fireButton) {
   ui.fireButton.addEventListener("pointerdown", (event) => {
     event.preventDefault();
+    event.stopPropagation();
     shootHeld = true;
     ui.fireButton.classList.add("is-pressed");
     ui.fireButton.setPointerCapture(event.pointerId);
     shoot();
   });
   const stopFire = (event) => {
-    if (event) event.preventDefault();
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
     shootHeld = false;
     ui.fireButton.classList.remove("is-pressed");
   };
@@ -3972,11 +4109,49 @@ ui.banner.addEventListener("click", (event) => {
   if (target?.id === "retryDayBtn") restartFailedDay();
   if (target?.id === "mainMenuBtn") showMainMenu();
 });
-ui.shopBtn.addEventListener("click", () => {
-  if (game.driving || game.escapeOnFoot) return;
+
+function consumeHudPointer(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  shootHeld = false;
+}
+
+let shopPointerId = null;
+let shopPointerActivated = false;
+
+ui.shopBtn.addEventListener("pointerdown", (event) => {
+  consumeHudPointer(event);
+  shopPointerId = event.pointerId;
+  ui.shopBtn.setPointerCapture(event.pointerId);
+});
+ui.shopBtn.addEventListener("pointerup", (event) => {
+  consumeHudPointer(event);
+  if (shopPointerId !== null && event.pointerId !== shopPointerId) return;
+  shopPointerId = null;
+  shopPointerActivated = true;
+  setShopOpen(!game.shopOpen);
+  window.setTimeout(() => {
+    shopPointerActivated = false;
+  }, 250);
+});
+ui.shopBtn.addEventListener("pointercancel", (event) => {
+  consumeHudPointer(event);
+  shopPointerId = null;
+});
+ui.shopBtn.addEventListener("mousedown", consumeHudPointer);
+ui.shopBtn.addEventListener("touchstart", consumeHudPointer, { passive: false });
+ui.shopBtn.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (shopPointerActivated) return;
   setShopOpen(!game.shopOpen);
 });
-ui.shopClose.addEventListener("click", () => {
+ui.shopPanel.addEventListener("pointerdown", consumeHudPointer);
+ui.shopPanel.addEventListener("mousedown", consumeHudPointer);
+ui.shopPanel.addEventListener("touchstart", consumeHudPointer, { passive: false });
+ui.shopClose.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
   setShopOpen(false);
 });
 ui.weaponTab.addEventListener("click", () => {

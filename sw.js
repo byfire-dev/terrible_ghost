@@ -1,4 +1,4 @@
-const CACHE_VERSION = "terrible-ghost-2026-05-09-1";
+const CACHE_VERSION = "terrible-ghost-2026-05-09-5";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const IMAGE_CACHE = `${CACHE_VERSION}-images`;
 
@@ -27,6 +27,7 @@ const STATIC_ASSETS = [
 const IMAGE_ASSETS = [
   "./assets/images/forest-ground-horror-texture.webp",
   "./assets/images/gameplay-atmosphere-overlay.webp",
+  "./assets/images/gameplay-interface-horror-overlay-v2.webp",
   "./assets/images/home-hero-horror.webp",
   "./assets/images/intro-story-cockpit.webp",
   "./assets/images/maze-stone-horror-texture.webp",

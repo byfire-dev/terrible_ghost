@@ -29,11 +29,23 @@ export function addAmmo(game, level, amount) {
 }
 
 export function weaponStats(weapon) {
+  const traits = {
+    pistol: "稳定单发",
+    rifle: "高速连射",
+    crossbow: "破石穿刺",
+    shotgun: "近距散射",
+    flame: "灼烧爆裂",
+    ice: "冻结减速",
+    laser: "直线贯穿",
+    cannon: "范围震爆",
+    storm: "连锁电弧",
+  };
   return {
     damage: weapon.damage,
     fireRate: Math.round(60 / weapon.fireDelay) / 10,
     speed: Math.round(weapon.bulletSpeed),
     range: Math.round((weapon.bulletSpeed * weapon.bulletLife) / 10),
     rock: weapon.level >= 3 ? "可破石" : "不可破石",
+    trait: traits[weapon.type] || "强化火力",
   };
 }

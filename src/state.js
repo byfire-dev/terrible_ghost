@@ -39,6 +39,7 @@ export function createInitialGameState() {
     healingLevel: 0,
     shopOpen: false,
     shopTab: "weapons",
+    shopDeniedTimer: 0,
     foundKeys: 0,
     day: 1,
     driving: false,

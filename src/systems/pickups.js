@@ -1,7 +1,7 @@
 import { CONFIG, MAX_AMMO, MAZE_TILE } from "../config.js";
 import { weapons } from "../data/weapons.js";
 import { clamp, dist, rand } from "../utils/math.js";
-import { addAmmo, getCurrentAmmo, getCurrentWeapon, medkitHeal } from "./loadout.js";
+import { addAmmo, getCurrentWeapon, medkitHeal } from "./loadout.js";
 
 export function collectPickupItems({ game, onAmmo, onChest, onKey, onMedkit }) {
   const spawnedPickups = [];
@@ -10,7 +10,8 @@ export function collectPickupItems({ game, onAmmo, onChest, onKey, onMedkit }) {
 
     switch (item.type) {
       case "ammo":
-        if (item.level !== getCurrentWeapon(game).level || getCurrentAmmo(game) >= MAX_AMMO) return true;
+        if (!game.ownedWeapons.some((id) => weapons.find((weapon) => weapon.id === id)?.level === item.level)) return true;
+        if ((game.ammo[String(item.level)] || 0) >= MAX_AMMO) return true;
         addAmmo(game, item.level, item.amount);
         onAmmo?.(item);
         return false;
@@ -36,15 +37,19 @@ export function collectPickupItems({ game, onAmmo, onChest, onKey, onMedkit }) {
 }
 
 export function openChest(game, chest) {
-  const weapon = chooseChestWeapon(game);
+  const offeredWeapon = chooseChestWeapon(game);
+  const unlockWeapon = !game.ownedWeapons.includes(offeredWeapon.id) && Math.random() < 0.28;
+  const weapon = unlockWeapon ? offeredWeapon : getCurrentWeapon(game);
   const previousWeaponId = game.weaponId;
-  if (!game.ownedWeapons.includes(weapon.id)) game.ownedWeapons.push(weapon.id);
-  game.weaponId = weapon.id;
-  if (previousWeaponId !== weapon.id) game.weaponSwitchTimer = 0.48;
-  const ammoAmount = Math.round(rand(CONFIG.chest.ammoMin, CONFIG.chest.ammoMax));
+  if (unlockWeapon) {
+    game.ownedWeapons.push(weapon.id);
+    game.weaponId = weapon.id;
+    if (previousWeaponId !== weapon.id) game.weaponSwitchTimer = 0.48;
+  }
+  const ammoAmount = Math.round(rand(CONFIG.chest.ammoMin, CONFIG.chest.ammoMax)) + (unlockWeapon ? 8 : 0);
   addAmmo(game, weapon.level, ammoAmount);
-  const reward = { weapon, ammoAmount, pointsAmount: 0, medkit: null };
-  if (Math.random() < 0.55) {
+  const reward = { weapon, ammoAmount, pointsAmount: 0, medkit: null, unlockedWeapon: unlockWeapon };
+  if (Math.random() < (unlockWeapon ? 0.35 : 0.72)) {
     const dayMultiplier = 1 + Math.max(0, game.day - 1) * 0.04;
     reward.pointsAmount = Math.round(rand(CONFIG.chest.pointsMin, CONFIG.chest.pointsMax) * dayMultiplier);
     game.points += reward.pointsAmount;

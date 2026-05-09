@@ -4,16 +4,18 @@ export function renderShop({
   ammoPrice,
   game,
   maxAmmo,
+  shopContext = { safe: true, multiplier: 1, title: "安全补给点", detail: "价格稳定，可安全补给。", advice: "" },
   ui,
   weaponArt,
+  weaponPrice = (weapon) => weapon.price,
   weapons,
   weaponStats,
 }) {
-  const weaponStatus = (owned, equipped, affordable) => {
+  const weaponStatus = (owned, equipped, affordable, shortfall) => {
     if (equipped) return { key: "equipped", label: "已装备", action: "使用中" };
     if (owned) return { key: "owned", label: "已解锁", action: "装备" };
     if (affordable) return { key: "ready", label: "可采购", action: "购买" };
-    return { key: "locked", label: "积分不足", action: "购买" };
+    return { key: "locked", label: `还差 ${shortfall}`, action: `还差 ${shortfall}` };
   };
   const tierLabel = (level) => {
     if (level >= 18) return "RELIC";
@@ -22,23 +24,50 @@ export function renderShop({
     return "FIELD";
   };
   const statPercent = (value, max) => Math.max(8, Math.min(100, Math.round((value / max) * 100)));
+  const appendShopAdvice = () => {
+    const advice = document.createElement("article");
+    advice.className = `shop-advice ${shopContext.safe ? "safe" : "emergency"}`;
+    advice.innerHTML = `
+      <div>
+        <strong>${shopContext.title}</strong>
+        <span>${shopContext.detail}</span>
+      </div>
+      <em>${shopContext.advice}</em>
+    `;
+    ui.weaponList.appendChild(advice);
+  };
+  const visibleWeapons = () => {
+    const owned = weapons.filter((weapon) => game.ownedWeapons.includes(weapon.id));
+    const current = weapons.find((weapon) => weapon.id === game.weaponId) || owned[0] || weapons[0];
+    const highestOwned = owned.reduce((max, weapon) => Math.max(max, weapon.level), current?.level || 1);
+    const unowned = weapons.filter((weapon) => !game.ownedWeapons.includes(weapon.id) && weapon.level > highestOwned);
+    const nearOwned = owned.filter((weapon) => Math.abs(weapon.level - current.level) <= 3);
+    const affordable = unowned.filter((weapon) => game.points >= weaponPrice(weapon)).slice(0, 3);
+    const next = unowned.slice(0, 4);
+    const selected = [current, ...nearOwned, ...owned.slice(-3), ...affordable, ...next];
+    return [...new Map(selected.filter(Boolean).map((weapon) => [weapon.id, weapon])).values()]
+      .sort((a, b) => a.level - b.level);
+  };
   ui.shopPoints.textContent = `${game.points} 积分`;
   ui.weaponTab.classList.toggle("active", game.shopTab === "weapons");
   ui.ammoTab.classList.toggle("active", game.shopTab === "ammo");
   ui.weaponList.innerHTML = "";
+  appendShopAdvice();
   if (game.shopTab === "ammo") {
-    weapons.forEach((weapon) => {
+    const ownedWeapons = weapons.filter((weapon) => game.ownedWeapons.includes(weapon.id));
+    ownedWeapons.forEach((weapon) => {
       const level = weapon.level;
       const amount = ammoPackSize(level);
       const stock = game.ammo[level] || 0;
       const price = ammoPrice(level);
       const full = stock >= maxAmmo;
       const affordable = !full && game.points >= price;
+      const shortfall = Math.max(0, price - game.points);
       const status = full
         ? { key: "full", label: "库存已满", action: "已满" }
         : affordable
           ? { key: "ready", label: "可补给", action: "购买" }
-          : { key: "locked", label: "积分不足", action: "购买" };
+          : { key: "locked", label: `还差 ${shortfall}`, action: `还差 ${shortfall}` };
       const stockPct = statPercent(stock, maxAmmo);
       const card = document.createElement("article");
       card.className = `weapon-card ammo-card ${affordable ? "affordable" : ""} ${full ? "full" : ""} ${!affordable && !full ? "locked" : ""}`;
@@ -56,7 +85,7 @@ export function renderShop({
           </div>
           <span class="weapon-meta">${weapon.name} 专用弹药包</span>
           <div class="shop-stat-grid">
-            <span><b>${price}</b><em>积分</em></span>
+            <span><b>${price}</b><em>${shopContext.safe ? "积分" : "黑市价"}</em></span>
             <span><b>+${amount}</b><em>补给</em></span>
             <span><b>${stock}</b><em>库存</em></span>
             <span><b>${maxAmmo}</b><em>上限</em></span>
@@ -71,12 +100,14 @@ export function renderShop({
     });
     return;
   }
-  weapons.forEach((weapon) => {
+  visibleWeapons().forEach((weapon) => {
     const owned = game.ownedWeapons.includes(weapon.id);
     const equipped = game.weaponId === weapon.id;
-    const affordable = !owned && game.points >= weapon.price;
+    const price = weaponPrice(weapon);
+    const affordable = !owned && game.points >= price;
+    const shortfall = Math.max(0, price - game.points);
     const stats = weaponStats(weapon);
-    const status = weaponStatus(owned, equipped, affordable);
+    const status = weaponStatus(owned, equipped, affordable, shortfall);
     const damagePct = statPercent(weapon.damage, 90);
     const firePct = statPercent(stats.fireRate, 8);
     const card = document.createElement("article");
@@ -93,9 +124,9 @@ export function renderShop({
           <strong class="weapon-title">${weapon.name}</strong>
           <span class="weapon-rank">LV ${weapon.level}</span>
         </div>
-        <span class="weapon-meta">${stats.rock} · 弹容 ${game.ammo[String(weapon.level)] || 0} / ${maxAmmo}</span>
+        <span class="weapon-meta">${stats.rock} · ${stats.trait} · 弹容 ${game.ammo[String(weapon.level)] || 0} / ${maxAmmo}</span>
         <div class="shop-stat-grid">
-          <span><b>${weapon.price}</b><em>积分</em></span>
+          <span><b>${price}</b><em>${shopContext.safe ? "积分" : "黑市价"}</em></span>
           <span><b>${weapon.damage}</b><em>伤害</em></span>
           <span><b>${stats.fireRate}</b><em>射速</em></span>
           <span><b>${stats.range}</b><em>射程</em></span>
@@ -105,7 +136,7 @@ export function renderShop({
           <i style="width: ${firePct}%"></i>
         </div>
       </div>
-      <button class="weapon-buy" type="button" data-weapon="${weapon.id}" ${!owned && !affordable ? "disabled" : ""}>
+      <button class="weapon-buy" type="button" data-weapon="${weapon.id}" ${equipped || (!owned && !affordable) ? "disabled" : ""}>
         ${status.action}
       </button>
     `;
@@ -118,13 +149,16 @@ export function renderQuickbar({ game, ui, weaponArt, weapons }) {
   ui.weaponQuickbar.classList.toggle("hidden", owned.length <= 1);
   ui.weaponQuickbar.innerHTML = "";
   owned.forEach((weapon) => {
+    const ammo = game.ammo[String(weapon.level)] || 0;
+    const ammoState = ammo <= 0 ? "empty" : ammo <= 8 ? "low" : "ready";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `quick-weapon ${game.weaponId === weapon.id ? "active" : ""}`;
+    button.className = `quick-weapon ammo-${ammoState} ${game.weaponId === weapon.id ? "active" : ""}`;
     button.dataset.weapon = weapon.id;
     button.innerHTML = `
       <img src="${weaponArt(weapon)}" alt="${weapon.name}">
       <span>${weapon.level}级</span>
+      <em>${ammo}</em>
     `;
     ui.weaponQuickbar.appendChild(button);
   });
